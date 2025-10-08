@@ -1,12 +1,14 @@
 import { RuntimeContext } from '@lobechat/agent-runtime';
 import { TRPCError } from '@trpc/server';
+import debug from 'debug';
 import { z } from 'zod';
 
 import { isEnableAgent } from '@/app/(backend)/api/agent/isEnableAgent';
-import { pino } from '@/libs/logger';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { AgentRuntimeService } from '@/server/services/agentRuntime';
+
+const log = debug('lobe-server:ai-agent-router');
 
 // Zod schemas for agent session operations
 const CreateAgentSessionSchema = z.object({
@@ -19,6 +21,7 @@ const CreateAgentSessionSchema = z.object({
     provider: z.string(),
   }),
   threadId: z.string().optional().nullable(),
+  tools: z.array(z.any()).optional(),
   topicId: z.string().optional().nullable(),
   userId: z.string().optional(),
 });
@@ -85,7 +88,9 @@ export const aiAgentRouter = router({
         modelRuntimeConfig,
         threadId,
         topicId,
+        tools,
       } = input;
+      log('input: %O', input);
 
       // Validate required parameters
       if (!modelRuntimeConfig.model || !modelRuntimeConfig.provider) {
@@ -98,7 +103,7 @@ export const aiAgentRouter = router({
       // Generate runtime session ID
       const runtimeSessionId = `agent_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
-      pino.info(`Creating session ${runtimeSessionId} for user ${ctx.userId}`);
+      log(`Creating session ${runtimeSessionId} for user ${ctx.userId}`);
 
       // Create initial context
       const initialContext: RuntimeContext = {
@@ -120,6 +125,7 @@ export const aiAgentRouter = router({
         initialMessages: messages,
         modelRuntimeConfig,
         sessionId: runtimeSessionId,
+        tools,
         userId: ctx.userId,
       });
 
@@ -131,11 +137,11 @@ export const aiAgentRouter = router({
           scheduled: true,
         };
 
-        pino.info(
+        log(
           `Session ${runtimeSessionId} created and first step scheduled (messageId: ${result.messageId})`,
         );
       } else {
-        pino.info(`Session ${runtimeSessionId} created without auto-start`);
+        log(`Session ${runtimeSessionId} created without auto-start`);
       }
 
       return {
@@ -157,7 +163,7 @@ export const aiAgentRouter = router({
 
       const { sessionId, userId } = input;
 
-      pino.info('Getting pending interventions for sessionId: %s, userId: %s', sessionId, userId);
+      log('Getting pending interventions for sessionId: %s, userId: %s', sessionId, userId);
 
       // Get pending interventions using AgentRuntimeService
       const result = await ctx.agentRuntimeService.getPendingInterventions({
@@ -179,7 +185,7 @@ export const aiAgentRouter = router({
       throw new Error('sessionId parameter is required');
     }
 
-    pino.info('Getting session status for %s', sessionId);
+    log('Getting session status for %s', sessionId);
 
     // Get session status using AgentRuntimeService
     const sessionStatus = await ctx.agentRuntimeService.getSessionStatus({
@@ -200,7 +206,7 @@ export const aiAgentRouter = router({
 
       const { sessionId, action, data, reason, stepIndex } = input;
 
-      pino.info(`Processing ${action} for session ${sessionId}`);
+      log(`Processing ${action} for session ${sessionId}`);
 
       // Build intervention parameters
       let interventionParams: any = {
@@ -266,7 +272,7 @@ export const aiAgentRouter = router({
 
     const { sessionId, context, priority, delay } = input;
 
-    pino.info('Starting execution for session %s', sessionId);
+    log('Starting execution for session %s', sessionId);
 
     // Start execution using AgentRuntimeService
     const result = await ctx.agentRuntimeService.startExecution({

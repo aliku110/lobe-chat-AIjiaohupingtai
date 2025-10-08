@@ -61,6 +61,7 @@ export class AgentRuntimeService {
       modelRuntimeConfig,
       userId,
       autoStart = true,
+      tools,
       initialMessages = [],
     } = params;
 
@@ -71,7 +72,8 @@ export class AgentRuntimeService {
       const initialState = {
         events: [],
         lastModified: new Date().toISOString(),
-        messages: initialMessages, // 使用传入的初始消息
+        // 使用传入的初始消息
+        messages: initialMessages,
         metadata: {
           agentConfig,
           createdAt: new Date().toISOString(),
@@ -81,6 +83,7 @@ export class AgentRuntimeService {
         sessionId,
         status: 'idle',
         stepCount: 0,
+        tools,
       };
 
       // 使用协调器创建会话，自动发送初始化事件

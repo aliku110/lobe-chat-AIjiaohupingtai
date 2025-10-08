@@ -23,6 +23,7 @@ export interface SessionCreationParams {
   initialMessages?: any[];
   modelRuntimeConfig?: any;
   sessionId: string;
+  tools?: any[];
   userId?: string;
 }
 

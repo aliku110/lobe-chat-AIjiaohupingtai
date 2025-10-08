@@ -1,6 +1,7 @@
 import { ChatMessage } from '@lobechat/types';
 
 import { lambdaClient } from '@/libs/trpc/client';
+import { createAgentToolsEngine } from '@/services/agentRuntime/toolEngine';
 import { HumanInterventionRequest } from '@/services/agentRuntime/type';
 import { contextEngineering } from '@/services/chat/contextEngineering';
 import { getAgentStoreState } from '@/store/agent';
@@ -29,8 +30,19 @@ class AgentRuntimeService {
       provider: agentConfig.provider!,
     };
 
+    const toolsEngine = createAgentToolsEngine({
+      model: agentConfig.model,
+      provider: agentConfig.provider!,
+    });
+
+    const { tools, enabledToolIds } = toolsEngine.generateToolsDetailed({
+      model: agentConfig.model,
+      provider: agentConfig.provider!,
+      toolIds: agentConfig.plugins,
+    });
+
     // Apply context engineering with preprocessing configuration
-    const oaiMessages = await contextEngineering({
+    const llmMessages = await contextEngineering({
       enableHistoryCount: agentChatConfigSelectors.enableHistoryCount(agentStoreState),
       // include user messages
       historyCount: agentChatConfigSelectors.historyCount(agentStoreState) + 2,
@@ -38,21 +50,21 @@ class AgentRuntimeService {
       messages: data.messages as any,
       ...modelRuntimeConfig,
       systemRole: agentConfig.systemRole,
-      // tools: pluginIds,
+      tools: enabledToolIds,
     });
 
     return await lambdaClient.aiAgent.createSession.mutate({
       ...data,
-      // TODO
       agentConfig: {
+        enableSearch: agentChatConfigSelectors.isAgentEnableSearch(agentStoreState),
+        maxSteps: 50,
         // costLimit: agentChatConfig.costLimit,
         // enableRAG: false,
-        enableSearch: agentChatConfigSelectors.isAgentEnableSearch(agentStoreState),
         // humanApprovalRequired: agentChatConfig.humanApprovalRequired || false,
-        maxSteps: 50,
       },
-      messages: oaiMessages,
+      messages: llmMessages,
       modelRuntimeConfig,
+      tools,
     });
   };
 

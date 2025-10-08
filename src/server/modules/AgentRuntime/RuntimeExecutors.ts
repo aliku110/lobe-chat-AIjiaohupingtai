@@ -1,10 +1,10 @@
 import { AgentEvent, AgentInstruction, InstructionExecutor } from '@lobechat/agent-runtime';
 import { ClientSecretPayload } from '@lobechat/types';
 import debug from 'debug';
-import OpenAI from 'openai';
 
 import { LOADING_FLAT } from '@/const/message';
 import { MessageModel } from '@/database/models/message';
+import { initModelRuntimeWithUserPayload } from '@/server/modules/ModelRuntime';
 
 import { StreamEventManager } from './StreamEventManager';
 
@@ -39,6 +39,7 @@ export const createRuntimeExecutors = (
       model: string;
       provider: string;
       sessionId: string;
+      tools: any[];
       topicId: string;
     };
 
@@ -73,86 +74,66 @@ export const createRuntimeExecutors = (
       let imageList: any[] = [];
       let grounding: any = null;
 
-      // 初始化 OpenAI 客户端
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        baseURL: process.env.OPENAI_PROXY_URL,
-      });
+      // 初始化 ModelRuntime
+      const modelRuntime = initModelRuntimeWithUserPayload(
+        llmPayload.provider,
+        ctx.userPayload || {},
+      );
 
-      // 使用 OpenAI SDK 进行流式处理
-      const stream = await openai.chat.completions.create({
+      // 构造 ChatStreamPayload
+      const chatPayload = {
         messages: llmPayload.messages,
         model: llmPayload.model,
-        stream: true,
+        tools: llmPayload.tools,
+      };
+
+      log('Calling model-runtime chat with payload: %O', {
+        model: chatPayload.model,
+        provider: llmPayload.provider,
       });
 
-      // 处理流式响应
-      try {
-        for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta;
-          if (!delta) continue;
+      // 调用 model-runtime chat
+      await modelRuntime.chat(chatPayload, {
+        callback: {
+          onText: async (text) => {
+            log('text', text);
+            content += text;
 
-          // 处理文本内容
-          if (delta.content) {
-            content += delta.content;
-
-            // 立即发布流式内容到 Redis Stream
+            // 构建标准 Agent Runtime 事件
+            events.push({
+              chunk: { text, type: 'text' },
+              type: 'llm_stream',
+            });
+            // 立即发布流式内容
             await streamManager.publishStreamChunk(sessionId, stepIndex, {
               chunkType: 'text',
-              content: delta.content,
+              content: text,
             });
-          }
-
-          // 处理工具调用
-          if (delta.tool_calls) {
-            // 合并工具调用
-            for (const toolCall of delta.tool_calls) {
-              const existingToolCall = toolCalls.find((tc) => tc.id === toolCall.id);
-              if (existingToolCall) {
-                // 更新现有工具调用
-                if (toolCall.function?.arguments) {
-                  existingToolCall.function.arguments += toolCall.function.arguments;
-                }
-              } else {
-                // 添加新工具调用
-                toolCalls.push({
-                  function: {
-                    arguments: toolCall.function?.arguments || '',
-                    name: toolCall.function?.name || '',
-                  },
-                  id: toolCall.id,
-                  type: toolCall.type,
-                });
-              }
-            }
-
+          },
+          onThinking: async (reasoning) => {
+            log('reasoning', reasoning);
+            thinkingContent += reasoning;
+            // 立即发布流式内容
+            await streamManager.publishStreamChunk(sessionId, stepIndex, {
+              chunkType: 'reasoning',
+              reasoning,
+            });
+          },
+          onToolsCalling: async ({ toolsCalling }) => {
+            log('toolsCalling', toolsCalling);
+            toolCalls = toolsCalling;
             await streamManager.publishStreamChunk(sessionId, stepIndex, {
               chunkType: 'tool_calls',
-              toolCalls: toolCalls,
+              toolCalls: toolsCalling,
             });
-          }
-
-          // 构建标准 Agent Runtime 事件
-          events.push({
-            chunk: {
-              text: delta.content || '',
-              tool_calls: delta.tool_calls || undefined,
-              type: 'text',
-            },
-            type: 'llm_stream',
-          });
-        }
-      } catch (streamError) {
-        console.error('[StreamingLLMExecutor] Stream processing error: %O', streamError);
-        throw streamError;
-      }
-
+          },
+        },
+        user: ctx.userId,
+      });
+      log('finish model-runtime calling');
       // 添加一个完整的 llm_stream 事件（包含所有流式块）
       events.push({
-        result: {
-          content,
-          tool_calls: toolCalls,
-        },
+        result: { content, tool_calls: toolCalls },
         type: 'llm_result',
       });
 
@@ -176,6 +157,9 @@ export const createRuntimeExecutors = (
       try {
         await ctx.messageModel.update(assistantMessageItem.id, {
           content,
+          reasoning: {
+            content: thinkingContent,
+          },
           search: grounding,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         });
