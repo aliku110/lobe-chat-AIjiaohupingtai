@@ -6,7 +6,11 @@ import { HealthCheckResult, QueueMessage, QueueStats } from './types';
  * Uses modular implementation approach to provide queue operation services
  */
 export class QueueService {
-  private impl: QueueServiceImpl = createQueueServiceModule();
+  private impl: QueueServiceImpl;
+
+  constructor() {
+    this.impl = createQueueServiceModule();
+  }
 
   /**
    * Schedule a message to the queue

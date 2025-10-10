@@ -13,13 +13,21 @@ import { setNamespace } from '@/utils/storeDebug';
 const log = debug('store:chat:ai-agent:runAgent');
 const n = setNamespace('agent');
 
+interface StreamingContext {
+  content: string;
+  reasoning: string;
+}
 export interface AgentAction {
   internal_cleanupAgentSession: (assistantId: string) => void;
   internal_handleAgentError: (assistantId: string, error: string) => void;
   /**
    * Agent Runtime 相关方法
    */
-  internal_handleAgentStreamEvent: (assistantId: string, event: StreamEvent) => Promise<void>;
+  internal_handleAgentStreamEvent: (
+    assistantId: string,
+    event: StreamEvent,
+    context: StreamingContext,
+  ) => Promise<void>;
   internal_handleHumanIntervention: (
     assistantId: string,
     action: string,
@@ -96,14 +104,12 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
   },
 
   // ======== Agent Runtime 相关方法 ========
-  internal_handleAgentStreamEvent: async (assistantId: string, event: StreamEvent) => {
+  internal_handleAgentStreamEvent: async (assistantId: string, event: StreamEvent, context) => {
     const session = get().agentSessions[assistantId];
     if (!session) {
       log(`No session found for ${assistantId}, ignoring event ${event.type}`);
       return;
     }
-
-    log(`Handling event ${event.type} for ${assistantId}:`, event);
 
     // 更新会话状态
     set(
@@ -137,25 +143,37 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
 
       case 'stream_chunk': {
         // 处理流式内容块
-        const { chunkType, content, fullContent, toolCalls } = event.data || {};
-        log(
-          `Stream chunk received for ${assistantId}: type=${chunkType}, hasContent=${!!content}, hasToolCalls=${!!toolCalls}`,
-        );
+        const { chunkType } = event.data || {};
+        log(`Stream chunk(${event.sessionId}): type=${chunkType}`);
 
-        if (chunkType === 'text' && content) {
-          // 更新文本内容
-          get().internal_dispatchMessage({
-            id: assistantId,
-            type: 'updateMessage',
-            value: { content },
-          });
-        } else if (chunkType === 'tool_calls' && toolCalls) {
-          // 更新工具调用
-          log(`Updating tool calls for ${assistantId}:`, toolCalls);
-          await get().internal_updateMessageContent(assistantId, fullContent || '', {
-            toolCalls,
-          });
+        switch (chunkType) {
+          case 'text': {
+            // 更新文本内容
+            context.content += event.data.content;
+            get().internal_dispatchMessage({
+              id: assistantId,
+              type: 'updateMessage',
+              value: { content: context.content },
+            });
+            break;
+          }
+          case 'reasoning': {
+            // 更新文本内容
+            context.reasoning += event.data.reasoning;
+            get().internal_dispatchMessage({
+              id: assistantId,
+              type: 'updateMessage',
+              value: { reasoning: { content: context.reasoning } },
+            });
+            break;
+          }
+          case 'toolsCalling': {
+            log(`Updating tool calls for ${assistantId}:`, event.data.toolCalls);
+
+            break;
+          }
         }
+
         break;
       }
 
@@ -260,7 +278,7 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
       }
 
       default: {
-        log(`Unknown event type for ${assistantId}: ${event.type}`);
+        log(`Handling event ${event.type} for ${assistantId}:`, event);
         break;
       }
     }
@@ -411,6 +429,10 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
 
       // 创建流式连接
       log(`Creating stream connection for session ${sessionResponse.sessionId}`);
+      const context = {
+        content: '',
+        reasoning: '',
+      };
       const eventSource = agentRuntimeClient.createStreamConnection(sessionResponse.sessionId, {
         includeHistory: false,
         onConnect: () => {
@@ -425,7 +447,7 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
           get().internal_handleAgentError(agentMessageId, error.message);
         },
         onEvent: async (event: StreamEvent) => {
-          await get().internal_handleAgentStreamEvent(agentMessageId, event);
+          await get().internal_handleAgentStreamEvent(agentMessageId, event, context);
         },
       });
 

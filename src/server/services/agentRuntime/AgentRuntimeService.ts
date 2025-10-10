@@ -35,7 +35,9 @@ export class AgentRuntimeService {
   private coordinator: AgentRuntimeCoordinator;
   private streamManager: StreamEventManager;
   private queueService: QueueService;
-  private baseURL: string;
+  private get baseURL() {
+    return process.env.AGENT_RUNTIME_BASE_URL || 'http://localhost:3010/api/agent';
+  }
   private userId: string;
   private db: LobeChatDatabase;
   private messageModel: MessageModel;
@@ -44,7 +46,7 @@ export class AgentRuntimeService {
     this.coordinator = new AgentRuntimeCoordinator();
     this.streamManager = new StreamEventManager();
     this.queueService = new QueueService();
-    this.baseURL = process.env.AGENT_RUNTIME_BASE_URL || 'http://localhost:3010/api/agent';
+    // this.baseURL = process.env.AGENT_RUNTIME_BASE_URL || 'http://localhost:3010/api/agent';
     this.userId = userId;
     this.db = db;
     this.messageModel = new MessageModel(db, this.userId);

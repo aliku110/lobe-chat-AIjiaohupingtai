@@ -1,4 +1,5 @@
 import { AgentEvent, AgentInstruction, InstructionExecutor } from '@lobechat/agent-runtime';
+import { consumeStreamUntilDone } from '@lobechat/model-runtime';
 import { ClientSecretPayload } from '@lobechat/types';
 import debug from 'debug';
 
@@ -93,10 +94,10 @@ export const createRuntimeExecutors = (
       });
 
       // 调用 model-runtime chat
-      await modelRuntime.chat(chatPayload, {
+      const response = await modelRuntime.chat(chatPayload, {
         callback: {
           onText: async (text) => {
-            log('text', text);
+            log('text:', text);
             content += text;
 
             // 构建标准 Agent Runtime 事件
@@ -111,7 +112,7 @@ export const createRuntimeExecutors = (
             });
           },
           onThinking: async (reasoning) => {
-            log('reasoning', reasoning);
+            log('reasoning:', reasoning);
             thinkingContent += reasoning;
             // 立即发布流式内容
             await streamManager.publishStreamChunk(sessionId, stepIndex, {
@@ -120,7 +121,7 @@ export const createRuntimeExecutors = (
             });
           },
           onToolsCalling: async ({ toolsCalling }) => {
-            log('toolsCalling', toolsCalling);
+            log('toolsCalling:', toolsCalling);
             toolCalls = toolsCalling;
             await streamManager.publishStreamChunk(sessionId, stepIndex, {
               chunkType: 'tool_calls',
@@ -130,6 +131,10 @@ export const createRuntimeExecutors = (
         },
         user: ctx.userId,
       });
+
+      // 消费流确保所有回调执行完成
+      await consumeStreamUntilDone(response);
+
       log('finish model-runtime calling');
       // 添加一个完整的 llm_stream 事件（包含所有流式块）
       events.push({
