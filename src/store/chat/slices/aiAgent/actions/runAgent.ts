@@ -14,8 +14,10 @@ const log = debug('store:chat:ai-agent:runAgent');
 const n = setNamespace('agent');
 
 interface StreamingContext {
+  assistantId: string;
   content: string;
   reasoning: string;
+  tmpAssistantId: string;
   toolsCalling?: ChatToolPayload[];
 }
 export interface AgentAction {
@@ -25,7 +27,7 @@ export interface AgentAction {
    * Agent Runtime 相关方法
    */
   internal_handleAgentStreamEvent: (
-    assistantId: string,
+    sessionId: string,
     event: StreamEvent,
     context: StreamingContext,
   ) => Promise<void>;
@@ -105,32 +107,29 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
   },
 
   // ======== Agent Runtime 相关方法 ========
-  internal_handleAgentStreamEvent: async (
-    assistantMessageId: string,
-    event: StreamEvent,
-    context,
-  ) => {
+  internal_handleAgentStreamEvent: async (sessionId, event, context) => {
     const { internal_dispatchMessage } = get();
-    let assistantId = assistantMessageId;
-    const session = get().agentSessions[assistantId];
+    const session = get().agentSessions[sessionId];
     if (!session) {
-      log(`No session found for ${assistantId}, ignoring event ${event.type}`);
+      log(`No session found for ${sessionId}, ignoring event ${event.type}`);
       return;
     }
 
     // 更新会话状态
     set(
       produce((draft) => {
-        if (draft.agentSessions[assistantId]) {
-          draft.agentSessions[assistantId].lastEventId = event.timestamp.toString();
+        if (draft.agentSessions[sessionId]) {
+          draft.agentSessions[sessionId].lastEventId = event.timestamp.toString();
           if (event.stepIndex !== undefined) {
-            draft.agentSessions[assistantId].stepCount = event.stepIndex;
+            draft.agentSessions[sessionId].stepCount = event.stepIndex;
           }
         }
       }),
       false,
-      n('updateAgentSessionFromEvent', { assistantId, eventType: event.type }),
+      n('updateAgentSessionFromEvent', { eventType: event.type }),
     );
+    const assistantId = context.assistantId || context.tmpAssistantId;
+    log(`assistantMessageId: ${assistantId}`);
 
     switch (event.type) {
       case 'connected': {
@@ -146,15 +145,14 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
       case 'stream_start': {
         log(`Stream started for ${assistantId}:`, event.data);
         internal_dispatchMessage({
-          id: assistantId,
+          id: context.tmpAssistantId,
           type: 'deleteMessage',
         });
 
-        assistantId = event.data.assistantMessage.id;
-        console.log('assistantId:', assistantId);
+        context.assistantId = event.data.assistantMessage.id;
 
         internal_dispatchMessage({
-          id: assistantId,
+          id: context.assistantId,
           type: 'createMessage',
           value: event.data.assistantMessage,
         });
@@ -440,7 +438,7 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
       // 存储 Agent 会话信息
       set(
         produce((draft) => {
-          draft.agentSessions[agentMessageId] = {
+          draft.agentSessions[sessionResponse.sessionId] = {
             lastEventId: '0',
             sessionId: sessionResponse.sessionId,
             status: 'created', // 使用后端返回的实际状态
@@ -459,8 +457,10 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
       log(`[StreamConnection] Creating stream connection for session ${sessionResponse.sessionId}`);
 
       const context: StreamingContext = {
+        assistantId: '',
         content: '',
         reasoning: '',
+        tmpAssistantId: agentMessageId,
       };
 
       const eventSource = agentRuntimeClient.createStreamConnection(sessionResponse.sessionId, {
@@ -477,7 +477,7 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
           get().internal_handleAgentError(agentMessageId, error.message);
         },
         onEvent: async (event: StreamEvent) => {
-          await get().internal_handleAgentStreamEvent(agentMessageId, event, context);
+          await get().internal_handleAgentStreamEvent(sessionResponse.sessionId, event, context);
         },
       });
 
