@@ -1,4 +1,4 @@
-import { RuntimeContext } from '@lobechat/agent-runtime';
+import { AgentRuntimeContext } from '@lobechat/agent-runtime';
 import { TRPCError } from '@trpc/server';
 import debug from 'debug';
 import { z } from 'zod';
@@ -106,8 +106,8 @@ export const aiAgentRouter = router({
       log(`Creating session ${runtimeSessionId} for user ${ctx.userId}`);
 
       // Create initial context
-      const initialContext: RuntimeContext = {
-        payload: { sessionId: agentSessionId, threadId, topicId },
+      const initialContext: AgentRuntimeContext = {
+        payload: {},
         phase: 'user_input' as const,
         session: {
           messageCount: messages.length,
@@ -120,6 +120,11 @@ export const aiAgentRouter = router({
       // Create session using AgentRuntimeService
       const result = await ctx.agentRuntimeService.createSession({
         agentConfig,
+        appContext: {
+          sessionId: agentSessionId,
+          threadId,
+          topicId,
+        },
         autoStart,
         initialContext,
         initialMessages: messages,

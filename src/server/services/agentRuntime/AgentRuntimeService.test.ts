@@ -102,6 +102,7 @@ describe('AgentRuntimeService', () => {
         },
         session: { sessionId: 'test-session-1', status: 'idle', stepCount: 0, messageCount: 0 },
       },
+      appContext: {},
       agentConfig: { name: 'test-agent' },
       modelRuntimeConfig: { model: 'gpt-4' },
       userId: 'user-123',

@@ -1,3 +1,4 @@
+import { AgentRuntimeContext, AgentState } from '@lobechat/agent-runtime';
 import debug from 'debug';
 
 const log = debug('lobe-server:agent-runtime:chat-agent');
@@ -28,7 +29,7 @@ export class ChatAgent {
   /**
    * 最简单的决策逻辑
    */
-  async runner(context: any, state: any) {
+  async runner(context: AgentRuntimeContext, state: AgentState) {
     log('Processing phase: %s for session %s', context.phase, this.config.sessionId);
 
     switch (context.phase) {
@@ -39,6 +40,7 @@ export class ChatAgent {
             messages: state.messages,
             model: this.config.modelRuntimeConfig?.model,
             provider: this.config.modelRuntimeConfig?.provider,
+            tools: state.tools,
           },
           type: 'call_llm',
         };

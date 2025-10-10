@@ -1,10 +1,16 @@
-import { AgentEvent, AgentInstruction, InstructionExecutor } from '@lobechat/agent-runtime';
+import {
+  AgentEvent,
+  AgentInstruction,
+  CallLLMPayload,
+  InstructionExecutor,
+} from '@lobechat/agent-runtime';
 import { consumeStreamUntilDone } from '@lobechat/model-runtime';
 import { ClientSecretPayload } from '@lobechat/types';
 import debug from 'debug';
 
 import { LOADING_FLAT } from '@/const/message';
 import { MessageModel } from '@/database/models/message';
+import { transformerToolsCalling } from '@/server/modules/AgentRuntime/transformerToolsCalling';
 import { initModelRuntimeWithUserPayload } from '@/server/modules/ModelRuntime';
 
 import { StreamEventManager } from './StreamEventManager';
@@ -29,38 +35,32 @@ export const createRuntimeExecutors = (
    * 集成 Agent Runtime 和流式事件发布
    */
   call_llm: async (instruction, state) => {
+    const stage = `call_llm`;
+
     const { payload } = instruction as Extract<AgentInstruction, { type: 'call_llm' }>;
+    const llmPayload = payload as CallLLMPayload;
     const { sessionId, stepIndex, streamManager } = ctx;
     const events: AgentEvent[] = [];
 
     // 类型断言确保 payload 的正确性
-    const llmPayload = payload as {
-      assistantMessageId?: string;
-      messages: any[];
-      model: string;
-      provider: string;
-      sessionId: string;
-      tools: any[];
-      topicId: string;
-    };
 
-    log('Starting LLM execution for session %s:%d', sessionId, stepIndex);
+    log(`[${stage}] Starting for session %s:%d, payload: %O`, sessionId, stepIndex, llmPayload);
 
     // create assistant message
     const assistantMessageItem = await ctx.messageModel.create({
       content: LOADING_FLAT,
       fromModel: llmPayload.model,
       fromProvider: llmPayload.provider,
-      // parentId: messageId,
       role: 'assistant',
-      sessionId: llmPayload.sessionId,
-      topicId: llmPayload.topicId,
+      sessionId: state.metadata!.sessionId!,
+      threadId: state.metadata?.threadId,
+      topicId: state.metadata?.topicId,
     });
 
     // 发布流式开始事件
     await streamManager.publishStreamEvent(sessionId, {
       data: {
-        messageId: llmPayload.assistantMessageId,
+        assistantMessage: assistantMessageItem,
         model: llmPayload.model,
         provider: llmPayload.provider,
       },
@@ -70,7 +70,7 @@ export const createRuntimeExecutors = (
 
     try {
       let content = '';
-      let toolCalls: any[] = [];
+      let toolsCalling: any[] = [];
       let thinkingContent = '';
       let imageList: any[] = [];
       let grounding: any = null;
@@ -88,45 +88,102 @@ export const createRuntimeExecutors = (
         tools: llmPayload.tools,
       };
 
-      log('Calling model-runtime chat with payload: %O', {
-        model: chatPayload.model,
-        provider: llmPayload.provider,
-      });
+      log(`[${stage}] calling model-runtime chat with payload: %O`, chatPayload);
+
+      // Buffer：累积 text 和 reasoning，每 50ms 发送一次
+      const BUFFER_INTERVAL = 50;
+      let textBuffer = '';
+      let reasoningBuffer = '';
+      // eslint-disable-next-line no-undef
+      let textBufferTimer: NodeJS.Timeout | null = null;
+      // eslint-disable-next-line no-undef
+      let reasoningBufferTimer: NodeJS.Timeout | null = null;
+      let lastToolsCallingTime = 0;
+
+      const flushTextBuffer = async () => {
+        const delta = textBuffer;
+        textBuffer = '';
+
+        log('flushTextBuffer:', delta);
+
+        // 构建标准 Agent Runtime 事件
+        events.push({
+          chunk: { text: delta, type: 'text' },
+          type: 'llm_stream',
+        });
+
+        await streamManager.publishStreamChunk(sessionId, stepIndex, {
+          chunkType: 'text',
+          content: delta,
+        });
+      };
+
+      const flushReasoningBuffer = async () => {
+        const delta = reasoningBuffer;
+
+        reasoningBuffer = '';
+
+        log('flushReasoningBuffer:', delta);
+
+        events.push({
+          chunk: { text: delta, type: 'reasoning' },
+          type: 'llm_stream',
+        });
+
+        if (reasoningBuffer) {
+          await streamManager.publishStreamChunk(sessionId, stepIndex, {
+            chunkType: 'reasoning',
+            reasoning: delta,
+          });
+        }
+      };
 
       // 调用 model-runtime chat
       const response = await modelRuntime.chat(chatPayload, {
         callback: {
           onText: async (text) => {
-            log('text:', text);
+            log('[text]', text);
             content += text;
 
-            // 构建标准 Agent Runtime 事件
-            events.push({
-              chunk: { text, type: 'text' },
-              type: 'llm_stream',
-            });
-            // 立即发布流式内容
-            await streamManager.publishStreamChunk(sessionId, stepIndex, {
-              chunkType: 'text',
-              content: text,
-            });
+            textBuffer += text;
+
+            // 如果没有定时器，创建一个
+            if (!textBufferTimer) {
+              textBufferTimer = setTimeout(async () => {
+                await flushTextBuffer();
+                textBufferTimer = null;
+              }, BUFFER_INTERVAL);
+            }
           },
           onThinking: async (reasoning) => {
-            log('reasoning:', reasoning);
+            log('[reasoning]', reasoning);
             thinkingContent += reasoning;
-            // 立即发布流式内容
-            await streamManager.publishStreamChunk(sessionId, stepIndex, {
-              chunkType: 'reasoning',
-              reasoning,
-            });
+
+            // Buffer reasoning 内容
+            reasoningBuffer += reasoning;
+
+            // 如果没有定时器，创建一个
+            if (!reasoningBufferTimer) {
+              reasoningBufferTimer = setTimeout(async () => {
+                await flushReasoningBuffer();
+                reasoningBufferTimer = null;
+              }, BUFFER_INTERVAL);
+            }
           },
-          onToolsCalling: async ({ toolsCalling }) => {
-            log('toolsCalling:', toolsCalling);
-            toolCalls = toolsCalling;
-            await streamManager.publishStreamChunk(sessionId, stepIndex, {
-              chunkType: 'tool_calls',
-              toolCalls: toolsCalling,
-            });
+          onToolsCalling: async ({ toolsCalling: raw }) => {
+            const payload = transformerToolsCalling(raw, {});
+            log('[toolsCalling]', payload);
+            toolsCalling = payload;
+
+            // 节流：300ms 内最多发送一次
+            const now = Date.now();
+            if (now - lastToolsCallingTime >= BUFFER_INTERVAL) {
+              await streamManager.publishStreamChunk(sessionId, stepIndex, {
+                chunkType: 'tools_calling',
+                toolsCalling: payload,
+              });
+              lastToolsCallingTime = now;
+            }
           },
         },
         user: ctx.userId,
@@ -135,10 +192,35 @@ export const createRuntimeExecutors = (
       // 消费流确保所有回调执行完成
       await consumeStreamUntilDone(response);
 
+      // 清理定时器并 flush 剩余 buffer
+      if (textBufferTimer) {
+        clearTimeout(textBufferTimer);
+        textBufferTimer = null;
+      }
+
+      if (reasoningBufferTimer) {
+        clearTimeout(reasoningBufferTimer);
+        reasoningBufferTimer = null;
+      }
+
+      await flushTextBuffer();
+      await flushReasoningBuffer();
+
       log('finish model-runtime calling');
+
+      if (thinkingContent) {
+        log('[reasoning] ', content);
+      }
+      if (content) {
+        log('[content] ', content);
+      }
+      if (toolsCalling.length > 0) {
+        log('[toolsCalling] ', toolsCalling);
+      }
+
       // 添加一个完整的 llm_stream 事件（包含所有流式块）
       events.push({
-        result: { content, tool_calls: toolCalls },
+        result: { content, tool_calls: toolsCalling },
         type: 'llm_result',
       });
 
@@ -148,9 +230,8 @@ export const createRuntimeExecutors = (
           finalContent: content,
           grounding: grounding,
           imageList: imageList.length > 0 ? imageList : undefined,
-          messageId: llmPayload.assistantMessageId || 'unknown',
           reasoning: thinkingContent || undefined,
-          toolCalls: toolCalls,
+          toolsCalling: toolsCalling,
         },
         stepIndex,
         type: 'stream_end',
@@ -166,7 +247,7 @@ export const createRuntimeExecutors = (
             content: thinkingContent,
           },
           search: grounding,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          tools: toolsCalling.length > 0 ? toolsCalling : undefined,
         });
       } catch (error) {
         console.error('[StreamingLLMExecutor] Failed to update final message: %O', error);
@@ -177,11 +258,11 @@ export const createRuntimeExecutors = (
       newState.messages.push({
         content,
         role: 'assistant',
-        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+        tool_calls: toolsCalling.length > 0 ? toolsCalling : undefined,
       });
 
       events.push({
-        result: { content, tool_calls: toolCalls },
+        result: { content, tool_calls: toolsCalling },
         type: 'llm_result',
       });
 
@@ -190,9 +271,9 @@ export const createRuntimeExecutors = (
         newState,
         nextContext: {
           payload: {
-            hasToolCalls: toolCalls.length > 0,
-            result: { content, tool_calls: toolCalls },
-            toolCalls,
+            hasToolsCalling: toolsCalling.length > 0,
+            result: { content, tool_calls: toolsCalling },
+            toolsCalling: toolsCalling,
           },
           phase: 'llm_result',
           session: {
@@ -209,7 +290,6 @@ export const createRuntimeExecutors = (
       await streamManager.publishStreamEvent(sessionId, {
         data: {
           error: (error as Error).message,
-          messageId: llmPayload.assistantMessageId || 'unknown',
           phase: 'llm_execution',
         },
         stepIndex,
@@ -405,8 +485,8 @@ export const createRuntimeExecutors = (
     // 通过流式系统通知前端显示审批 UI
     await streamManager.publishStreamChunk(sessionId, stepIndex, {
       // 使用 sessionId 作为 messageId
-      chunkType: 'tool_calls',
-      toolCalls: pendingToolsCalling,
+      chunkType: 'tools_calling',
+      toolsCalling: pendingToolsCalling as any,
     });
 
     const events: AgentEvent[] = [

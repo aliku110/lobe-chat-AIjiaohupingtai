@@ -1,4 +1,4 @@
-import { AgentRuntime } from '@lobechat/agent-runtime';
+import { AgentRuntime, AgentState } from '@lobechat/agent-runtime';
 import debug from 'debug';
 
 import { MessageModel } from '@/database/models/message';
@@ -65,6 +65,7 @@ export class AgentRuntimeService {
       autoStart = true,
       tools,
       initialMessages = [],
+      appContext,
     } = params;
 
     try {
@@ -72,21 +73,22 @@ export class AgentRuntimeService {
 
       // 初始化会话状态 - 先创建状态再保存
       const initialState = {
-        events: [],
+        createdAt: new Date().toISOString(),
         lastModified: new Date().toISOString(),
         // 使用传入的初始消息
         messages: initialMessages,
+
         metadata: {
           agentConfig,
-          createdAt: new Date().toISOString(),
           modelRuntimeConfig,
           userId,
+          ...appContext,
         },
         sessionId,
         status: 'idle',
         stepCount: 0,
         tools,
-      };
+      } as Partial<AgentState>;
 
       // 使用协调器创建会话，自动发送初始化事件
       await this.coordinator.createAgentSession(sessionId, {

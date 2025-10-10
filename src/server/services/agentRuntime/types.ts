@@ -1,8 +1,8 @@
-import { RuntimeContext } from '@lobechat/agent-runtime';
+import { AgentRuntimeContext } from '@lobechat/agent-runtime';
 
 export interface AgentExecutionParams {
   approvedToolCall?: any;
-  context?: RuntimeContext;
+  context?: AgentRuntimeContext;
   humanInput?: any;
   rejectionReason?: string;
   sessionId: string;
@@ -18,8 +18,13 @@ export interface AgentExecutionResult {
 
 export interface SessionCreationParams {
   agentConfig?: any;
+  appContext: {
+    sessionId?: string;
+    threadId?: string | null;
+    topicId?: string | null;
+  };
   autoStart?: boolean;
-  initialContext: RuntimeContext;
+  initialContext: AgentRuntimeContext;
   initialMessages?: any[];
   modelRuntimeConfig?: any;
   sessionId: string;
@@ -84,7 +89,7 @@ export interface PendingInterventionsResult {
 }
 
 export interface StartExecutionParams {
-  context?: RuntimeContext;
+  context?: AgentRuntimeContext;
   delay?: number;
   priority?: 'high' | 'normal' | 'low';
   sessionId: string;

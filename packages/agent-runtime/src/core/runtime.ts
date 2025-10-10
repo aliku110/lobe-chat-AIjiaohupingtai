@@ -2,11 +2,11 @@ import type {
   Agent,
   AgentEvent,
   AgentInstruction,
+  AgentRuntimeContext,
   AgentState,
   Cost,
   InstructionExecutor,
   RuntimeConfig,
-  RuntimeContext,
   ToolRegistry,
   ToolsCalling,
   Usage,
@@ -45,8 +45,8 @@ export class AgentRuntime {
    */
   async step(
     state: AgentState,
-    context?: RuntimeContext,
-  ): Promise<{ events: AgentEvent[]; newState: AgentState; nextContext?: RuntimeContext }> {
+    context?: AgentRuntimeContext,
+  ): Promise<{ events: AgentEvent[]; newState: AgentState; nextContext?: AgentRuntimeContext }> {
     try {
       // Increment step count and check limits
       const newState = structuredClone(state);
@@ -74,7 +74,7 @@ export class AgentRuntime {
       // Use provided context or create initial context
       const runtimeContext = context || this.createInitialContext(newState);
 
-      let result: { events: AgentEvent[]; newState: AgentState; nextContext?: RuntimeContext };
+      let result: { events: AgentEvent[]; newState: AgentState; nextContext?: AgentRuntimeContext };
 
       // Handle human approved tool calls
       if (runtimeContext.phase === 'human_approved_tool') {
@@ -108,8 +108,8 @@ export class AgentRuntime {
   async approveToolCall(
     state: AgentState,
     approvedToolCall: ToolsCalling,
-  ): Promise<{ events: AgentEvent[]; newState: AgentState; nextContext?: RuntimeContext }> {
-    const context: RuntimeContext = {
+  ): Promise<{ events: AgentEvent[]; newState: AgentState; nextContext?: AgentRuntimeContext }> {
+    const context: AgentRuntimeContext = {
       payload: { approvedToolCall },
       phase: 'human_approved_tool',
       session: this.createSessionContext(state),
@@ -168,8 +168,8 @@ export class AgentRuntime {
   async resume(
     state: AgentState,
     reason: string = 'User resumed execution',
-    context?: RuntimeContext,
-  ): Promise<{ events: AgentEvent[]; newState: AgentState; nextContext?: RuntimeContext }> {
+    context?: AgentRuntimeContext,
+  ): Promise<{ events: AgentEvent[]; newState: AgentState; nextContext?: AgentRuntimeContext }> {
     if (state.status !== 'interrupted') {
       throw new Error('Cannot resume: state is not interrupted');
     }
@@ -340,7 +340,7 @@ export class AgentRuntime {
         }
 
         // Provide next context based on LLM result
-        const nextContext: RuntimeContext = {
+        const nextContext: AgentRuntimeContext = {
           payload: {
             hasToolCalls: toolCalls.length > 0,
             result: { content: assistantContent, tool_calls: toolCalls },
@@ -405,7 +405,7 @@ export class AgentRuntime {
       }
 
       // Provide next context for tool result
-      const nextContext: RuntimeContext = {
+      const nextContext: AgentRuntimeContext = {
         payload: {
           result,
           toolCall,
@@ -528,7 +528,7 @@ export class AgentRuntime {
   private handleCostLimitExceeded(state: AgentState): {
     events: AgentEvent[];
     newState: AgentState;
-    nextContext?: RuntimeContext;
+    nextContext?: AgentRuntimeContext;
   } {
     const newState = structuredClone(state);
     const costLimit = newState.costLimit!;
@@ -601,7 +601,7 @@ export class AgentRuntime {
   /**
    * Create initial context for the first step (fallback for backward compatibility)
    */
-  private createInitialContext(state: AgentState): RuntimeContext {
+  private createInitialContext(state: AgentState): AgentRuntimeContext {
     const lastMessage = state.messages.at(-1);
 
     if (lastMessage?.role === 'user') {

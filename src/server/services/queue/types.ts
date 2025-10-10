@@ -1,7 +1,7 @@
-import { RuntimeContext } from '@lobechat/agent-runtime';
+import { AgentRuntimeContext } from '@lobechat/agent-runtime';
 
 export interface QueueMessage {
-  context?: RuntimeContext;
+  context?: AgentRuntimeContext;
   delay?: number;
   endpoint: string;
   payload?: any;

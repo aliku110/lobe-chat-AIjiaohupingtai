@@ -5,7 +5,8 @@ import type { Cost, CostCalculationContext, Usage } from './usage';
 /**
  * Runtime execution context passed to Agent runner
  */
-export interface RuntimeContext {
+export interface AgentRuntimeContext {
+  metadata?: Record<string, unknown>;
   /** Phase-specific payload/context */
   payload?: unknown;
   /** Current execution phase */
@@ -17,7 +18,7 @@ export interface RuntimeContext {
     | 'human_response'
     | 'human_approved_tool'
     | 'error';
-  /** Session metadata */
+  /** Session */
   session: {
     messageCount: number;
     sessionId: string;
@@ -67,14 +68,21 @@ export interface Agent {
    * @param context - Current runtime context with phase and payload
    * @param state - Complete agent state for reference
    */
-  runner(context: RuntimeContext, state: AgentState): Promise<AgentInstruction>;
+  runner(context: AgentRuntimeContext, state: AgentState): Promise<AgentInstruction>;
 
   /** Optional tools registry held by the agent */
   tools?: ToolRegistry;
 }
 
+export interface CallLLMPayload {
+  messages: any[];
+  model: string;
+  provider: string;
+  tools: any[];
+}
+
 export interface AgentInstructionCallLlm {
-  payload: unknown;
+  payload: any;
   type: 'call_llm';
 }
 

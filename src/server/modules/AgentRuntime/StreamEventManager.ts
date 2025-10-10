@@ -1,3 +1,4 @@
+import { ChatToolPayload } from '@lobechat/types';
 import debug from 'debug';
 import Redis from 'ioredis';
 
@@ -23,11 +24,11 @@ export interface StreamEvent {
 }
 
 export interface StreamChunkData {
-  chunkType: 'text' | 'reasoning' | 'tool_calls' | 'image' | 'grounding';
+  chunkType: 'text' | 'reasoning' | 'tools_calling' | 'image' | 'grounding';
   content?: string;
   images?: any[];
-  reasoning?: any;
-  toolCalls?: any[];
+  reasoning?: string;
+  toolsCalling?: ChatToolPayload[];
 }
 
 export class StreamEventManager {

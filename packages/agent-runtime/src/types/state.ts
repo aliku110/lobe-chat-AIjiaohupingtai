@@ -12,6 +12,7 @@ export interface AgentState {
 
   // --- Core Context ---
   messages: any[];
+  tools?: any[];
   systemRole?: string;
 
   // --- Execution Tracking ---

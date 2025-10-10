@@ -1,13 +1,13 @@
 import { LOADING_FLAT, isDesktop } from '@lobechat/const';
+import { ChatToolPayload, CreateMessageParams, SendMessageParams } from '@lobechat/types';
 import debug from 'debug';
 import { produce } from 'immer';
 import { StateCreator } from 'zustand/vanilla';
 
 import { StreamEvent, agentRuntimeClient, agentRuntimeService } from '@/services/agentRuntime';
 import { messageService } from '@/services/message';
-import { chatSelectors } from '@/store/chat/slices/message/selectors';
+import { chatSelectors } from '@/store/chat/selectors';
 import { ChatStore } from '@/store/chat/store';
-import { CreateMessageParams, SendMessageParams } from '@/types/message';
 import { setNamespace } from '@/utils/storeDebug';
 
 const log = debug('store:chat:ai-agent:runAgent');
@@ -16,6 +16,7 @@ const n = setNamespace('agent');
 interface StreamingContext {
   content: string;
   reasoning: string;
+  toolsCalling?: ChatToolPayload[];
 }
 export interface AgentAction {
   internal_cleanupAgentSession: (assistantId: string) => void;
@@ -104,7 +105,13 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
   },
 
   // ======== Agent Runtime 相关方法 ========
-  internal_handleAgentStreamEvent: async (assistantId: string, event: StreamEvent, context) => {
+  internal_handleAgentStreamEvent: async (
+    assistantMessageId: string,
+    event: StreamEvent,
+    context,
+  ) => {
+    const { internal_dispatchMessage } = get();
+    let assistantId = assistantMessageId;
     const session = get().agentSessions[assistantId];
     if (!session) {
       log(`No session found for ${assistantId}, ignoring event ${event.type}`);
@@ -138,38 +145,62 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
 
       case 'stream_start': {
         log(`Stream started for ${assistantId}:`, event.data);
+        internal_dispatchMessage({
+          id: assistantId,
+          type: 'deleteMessage',
+        });
+
+        assistantId = event.data.assistantMessage.id;
+        console.log('assistantId:', assistantId);
+
+        internal_dispatchMessage({
+          id: assistantId,
+          type: 'createMessage',
+          value: event.data.assistantMessage,
+        });
+
         break;
       }
 
       case 'stream_chunk': {
         // 处理流式内容块
         const { chunkType } = event.data || {};
-        log(`Stream chunk(${event.sessionId}): type=${chunkType}`);
 
         switch (chunkType) {
           case 'text': {
             // 更新文本内容
             context.content += event.data.content;
-            get().internal_dispatchMessage({
+            log(`Stream(${event.sessionId}) chunk type=${chunkType}: `, event.data.content);
+
+            internal_dispatchMessage({
               id: assistantId,
               type: 'updateMessage',
               value: { content: context.content },
             });
             break;
           }
+
           case 'reasoning': {
             // 更新文本内容
             context.reasoning += event.data.reasoning;
-            get().internal_dispatchMessage({
+            log(`Stream(${event.sessionId}) chunk type=${chunkType}: `, event.data.reasoning);
+
+            internal_dispatchMessage({
               id: assistantId,
               type: 'updateMessage',
               value: { reasoning: { content: context.reasoning } },
             });
             break;
           }
-          case 'toolsCalling': {
-            log(`Updating tool calls for ${assistantId}:`, event.data.toolCalls);
 
+          case 'tools_calling': {
+            context.toolsCalling = event.data.toolsCalling;
+
+            internal_dispatchMessage({
+              id: assistantId,
+              type: 'updateMessage',
+              value: { tools: context.toolsCalling },
+            });
             break;
           }
         }
@@ -404,10 +435,7 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
         userMessageId,
       });
 
-      log(
-        `Created session ${sessionResponse.sessionId} for message ${agentMessageId}:`,
-        sessionResponse,
-      );
+      log(`Created session ${sessionResponse.sessionId}:`, sessionResponse);
 
       // 存储 Agent 会话信息
       set(
@@ -428,22 +456,24 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
       );
 
       // 创建流式连接
-      log(`Creating stream connection for session ${sessionResponse.sessionId}`);
-      const context = {
+      log(`[StreamConnection] Creating stream connection for session ${sessionResponse.sessionId}`);
+
+      const context: StreamingContext = {
         content: '',
         reasoning: '',
       };
+
       const eventSource = agentRuntimeClient.createStreamConnection(sessionResponse.sessionId, {
         includeHistory: false,
         onConnect: () => {
-          log(`Stream connected for ${agentMessageId}`);
+          log(`Stream connected to ${sessionResponse.sessionId}`);
         },
         onDisconnect: () => {
-          log(`Stream disconnected for ${agentMessageId}`);
+          log(`Stream disconnected to ${sessionResponse.sessionId}`);
           get().internal_cleanupAgentSession(agentMessageId);
         },
         onError: (error: Error) => {
-          log(`Stream error for ${agentMessageId}:`, error);
+          log(`Stream error for ${sessionResponse.sessionId}:`, error);
           get().internal_handleAgentError(agentMessageId, error.message);
         },
         onEvent: async (event: StreamEvent) => {

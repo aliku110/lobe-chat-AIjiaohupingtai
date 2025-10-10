@@ -3,12 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   Agent,
   AgentEventError,
+  AgentRuntimeContext,
   AgentState,
   Cost,
   CostCalculationContext,
   CostLimit,
   RuntimeConfig,
-  RuntimeContext,
   ToolsCalling,
   Usage,
 } from '../../types';
@@ -20,7 +20,7 @@ class MockAgent implements Agent {
   executors = {};
   modelRuntime?: (payload: unknown) => AsyncIterable<any>;
 
-  async runner(context: RuntimeContext, state: AgentState) {
+  async runner(context: AgentRuntimeContext, state: AgentState) {
     switch (context.phase) {
       case 'user_input':
         return { type: 'call_llm' as const, payload: { messages: state.messages } };
@@ -43,10 +43,10 @@ class MockAgent implements Agent {
 
 // Helper function to create test context
 function createTestContext(
-  phase: RuntimeContext['phase'],
+  phase: AgentRuntimeContext['phase'],
   payload?: any,
   sessionId: string = 'test-session',
-): RuntimeContext {
+): AgentRuntimeContext {
   return {
     phase,
     payload,
@@ -694,7 +694,7 @@ describe('AgentRuntime', () => {
       });
       const interruptResult = runtime.interrupt(state, 'Test interruption');
 
-      const resumeContext: RuntimeContext = {
+      const resumeContext: AgentRuntimeContext = {
         phase: 'user_input',
         payload: { message: { role: 'user', content: 'Hello' } },
         session: {
@@ -768,7 +768,7 @@ describe('AgentRuntime', () => {
           test_tool: async () => ({ result: 'success' }),
         };
 
-        async runner(context: RuntimeContext, state: AgentState) {
+        async runner(context: AgentRuntimeContext, state: AgentState) {
           switch (context.phase) {
             case 'user_input':
               return { type: 'call_llm' as const, payload: { messages: state.messages } };
@@ -835,7 +835,7 @@ describe('AgentRuntime', () => {
 
     it('should respect cost limits with stop action', async () => {
       class CostTrackingAgent implements Agent {
-        async runner(context: RuntimeContext, state: AgentState) {
+        async runner(context: AgentRuntimeContext, state: AgentState) {
           return { type: 'call_llm' as const, payload: { messages: state.messages } };
         }
 
@@ -884,7 +884,7 @@ describe('AgentRuntime', () => {
 
     it('should handle cost limit with interrupt action', async () => {
       class CostTrackingAgent implements Agent {
-        async runner(context: RuntimeContext, state: AgentState) {
+        async runner(context: AgentRuntimeContext, state: AgentState) {
           return { type: 'call_llm' as const, payload: { messages: state.messages } };
         }
 
@@ -941,25 +941,27 @@ describe('AgentRuntime', () => {
       };
 
       // Mock agent behavior for different states
-      agent.runner = vi.fn().mockImplementation((context: RuntimeContext, state: AgentState) => {
-        switch (context.phase) {
-          case 'user_input':
-            return Promise.resolve({ type: 'call_llm', payload: { messages: state.messages } });
-          case 'llm_result':
-            const llmPayload = context.payload as { result: any; hasToolCalls: boolean };
-            if (llmPayload.hasToolCalls) {
-              return Promise.resolve({
-                type: 'request_human_approve',
-                pendingToolsCalling: llmPayload.result.tool_calls,
-              });
-            }
-            return Promise.resolve({ type: 'finish', reason: 'completed', reasonDetail: 'Done' });
-          case 'tool_result':
-            return Promise.resolve({ type: 'call_llm', payload: { messages: state.messages } });
-          default:
-            return Promise.resolve({ type: 'finish', reason: 'completed', reasonDetail: 'Done' });
-        }
-      });
+      agent.runner = vi
+        .fn()
+        .mockImplementation((context: AgentRuntimeContext, state: AgentState) => {
+          switch (context.phase) {
+            case 'user_input':
+              return Promise.resolve({ type: 'call_llm', payload: { messages: state.messages } });
+            case 'llm_result':
+              const llmPayload = context.payload as { result: any; hasToolCalls: boolean };
+              if (llmPayload.hasToolCalls) {
+                return Promise.resolve({
+                  type: 'request_human_approve',
+                  pendingToolsCalling: llmPayload.result.tool_calls,
+                });
+              }
+              return Promise.resolve({ type: 'finish', reason: 'completed', reasonDetail: 'Done' });
+            case 'tool_result':
+              return Promise.resolve({ type: 'call_llm', payload: { messages: state.messages } });
+            default:
+              return Promise.resolve({ type: 'finish', reason: 'completed', reasonDetail: 'Done' });
+          }
+        });
 
       async function* mockModelRuntime(payload: unknown) {
         const messages = (payload as any).messages;

@@ -1,4 +1,4 @@
-import { AgentEvent, AgentState, RuntimeContext } from '@lobechat/agent-runtime';
+import { AgentEvent, AgentRuntimeContext, AgentState } from '@lobechat/agent-runtime';
 import debug from 'debug';
 import Redis from 'ioredis';
 
@@ -10,7 +10,7 @@ export interface StepResult {
   events?: AgentEvent[];
   executionTime: number;
   newState: AgentState;
-  nextContext?: RuntimeContext;
+  nextContext?: AgentRuntimeContext;
   stepIndex: number;
 }
 
