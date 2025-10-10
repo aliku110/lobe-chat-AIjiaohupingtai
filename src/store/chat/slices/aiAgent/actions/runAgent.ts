@@ -429,7 +429,7 @@ export const agentSlice: StateCreator<ChatStore, [['zustand/devtools', never]], 
         autoStart: true,
         messages,
         threadId: activeThreadId,
-        topicId: activeThreadId,
+        topicId: activeTopicId,
         userMessageId,
       });
 

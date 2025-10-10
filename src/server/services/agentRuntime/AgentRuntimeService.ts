@@ -5,7 +5,7 @@ import { MessageModel } from '@/database/models/message';
 import { LobeChatDatabase } from '@/database/type';
 import {
   AgentRuntimeCoordinator,
-  ChatAgent,
+  GeneralAgent,
   StreamEventManager,
 } from '@/server/modules/AgentRuntime';
 import {
@@ -552,7 +552,7 @@ export class AgentRuntimeService {
    */
   private async createAgentRuntime(sessionId: string, sessionMetadata?: any) {
     // 创建 Durable Agent 实例
-    const agent = new ChatAgent({
+    const agent = new GeneralAgent({
       agentConfig: sessionMetadata?.agentConfig,
       modelRuntimeConfig: sessionMetadata?.modelRuntimeConfig,
       sessionId,

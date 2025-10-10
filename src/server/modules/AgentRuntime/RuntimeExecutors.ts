@@ -5,11 +5,12 @@ import {
   InstructionExecutor,
 } from '@lobechat/agent-runtime';
 import { consumeStreamUntilDone } from '@lobechat/model-runtime';
-import { ClientSecretPayload } from '@lobechat/types';
+import { ChatToolPayload, ClientSecretPayload, MessageToolCall } from '@lobechat/types';
 import debug from 'debug';
 
 import { LOADING_FLAT } from '@/const/message';
 import { MessageModel } from '@/database/models/message';
+import { GeneralAgentLLMResultPayload } from '@/server/modules/AgentRuntime/GeneralAgent';
 import { transformerToolsCalling } from '@/server/modules/AgentRuntime/transformerToolsCalling';
 import { initModelRuntimeWithUserPayload } from '@/server/modules/ModelRuntime';
 
@@ -70,7 +71,8 @@ export const createRuntimeExecutors = (
 
     try {
       let content = '';
-      let toolsCalling: any[] = [];
+      let toolsCalling: ChatToolPayload[] = [];
+      let tool_calls: MessageToolCall[] = [];
       let thinkingContent = '';
       let imageList: any[] = [];
       let grounding: any = null;
@@ -98,7 +100,6 @@ export const createRuntimeExecutors = (
       let textBufferTimer: NodeJS.Timeout | null = null;
       // eslint-disable-next-line no-undef
       let reasoningBufferTimer: NodeJS.Timeout | null = null;
-      let lastToolsCallingTime = 0;
 
       const flushTextBuffer = async () => {
         const delta = textBuffer;
@@ -174,16 +175,12 @@ export const createRuntimeExecutors = (
             const payload = transformerToolsCalling(raw, {});
             log('[toolsCalling]', payload);
             toolsCalling = payload;
+            tool_calls = raw;
 
-            // 节流：300ms 内最多发送一次
-            const now = Date.now();
-            if (now - lastToolsCallingTime >= BUFFER_INTERVAL) {
-              await streamManager.publishStreamChunk(sessionId, stepIndex, {
-                chunkType: 'tools_calling',
-                toolsCalling: payload,
-              });
-              lastToolsCallingTime = now;
-            }
+            await streamManager.publishStreamChunk(sessionId, stepIndex, {
+              chunkType: 'tools_calling',
+              toolsCalling: payload,
+            });
           },
         },
         user: ctx.userId,
@@ -220,7 +217,7 @@ export const createRuntimeExecutors = (
 
       // 添加一个完整的 llm_stream 事件（包含所有流式块）
       events.push({
-        result: { content, tool_calls: toolsCalling },
+        result: { content, tool_calls },
         type: 'llm_result',
       });
 
@@ -261,20 +258,15 @@ export const createRuntimeExecutors = (
         tool_calls: toolsCalling.length > 0 ? toolsCalling : undefined,
       });
 
-      events.push({
-        result: { content, tool_calls: toolsCalling },
-        type: 'llm_result',
-      });
-
       return {
         events,
         newState,
         nextContext: {
           payload: {
             hasToolsCalling: toolsCalling.length > 0,
-            result: { content, tool_calls: toolsCalling },
+            result: { content, tool_calls },
             toolsCalling: toolsCalling,
-          },
+          } as GeneralAgentLLMResultPayload,
           phase: 'llm_result',
           session: {
             eventCount: events.length,
@@ -374,8 +366,9 @@ export const createRuntimeExecutors = (
         newState,
         nextContext: {
           payload: {
+            data: result,
             executionTime,
-            result,
+            isSuccess: true,
             toolCall,
             toolCallId: toolCall.id,
           },
