@@ -1,4 +1,3 @@
-
 import type { FinishReason } from './event';
 import { AgentState, ToolRegistry, ToolsCalling } from './state';
 import type { Cost, CostCalculationContext, Usage } from './usage';
@@ -101,12 +100,12 @@ export interface AgentInstructionCallLlm {
 }
 
 export interface AgentInstructionCallTool {
-  payload: CallingToolPayload;
+  payload: any;
   type: 'call_tool';
 }
 
 export interface AgentInstructionCallToolsBatch {
-  payload: ToolsCalling[];
+  payload: any[];
   type: 'call_tools_batch';
 }
 

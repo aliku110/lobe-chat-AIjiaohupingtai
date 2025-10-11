@@ -12,6 +12,7 @@ import { MessageModel } from '@/database/models/message';
 import { GeneralAgentLLMResultPayload } from '@/server/modules/AgentRuntime/GeneralAgent';
 import { transformerToolsCalling } from '@/server/modules/AgentRuntime/transformerToolsCalling';
 import { initModelRuntimeWithUserPayload } from '@/server/modules/ModelRuntime';
+import { ToolExecutionService } from '@/server/services/toolExecution';
 
 import { StreamEventManager } from './StreamEventManager';
 
@@ -23,6 +24,7 @@ export interface RuntimeExecutorContext {
   sessionId: string;
   stepIndex: number;
   streamManager: StreamEventManager;
+  toolExecutionService: ToolExecutionService;
   userId?: string;
   userPayload?: ClientSecretPayload;
 }
@@ -306,7 +308,7 @@ export const createRuntimeExecutors = (
     const stage = 'call_tool';
 
     const { payload } = instruction as Extract<AgentInstruction, { type: 'call_tool' }>;
-    const { sessionId, stepIndex, streamManager } = ctx;
+    const { sessionId, stepIndex, streamManager, toolExecutionService } = ctx;
     const events: AgentEvent[] = [];
 
     log(`[${stage}] %O`, payload);
@@ -319,31 +321,32 @@ export const createRuntimeExecutors = (
     });
 
     try {
-      const args = JSON.parse(payload.arguments || '{}');
-      const startTime = Date.now();
-
-      // Mock 工具执行结果
-      const result = {
-        args,
-        message: `Mock execution of tool ${payload.apiName} with args: ${JSON.stringify(args)}`,
-        success: true,
-        toolName: payload.apiName,
+      // Convert CallingToolPayload to ChatToolPayload for ToolExecutionService
+      const chatToolPayload: ChatToolPayload = {
+        apiName: payload.apiName,
+        arguments: payload.arguments,
+        id: payload.id,
+        identifier: payload.identifier,
+        type: payload.type as any, // CallingToolPayload.type is compatible
       };
 
-      // 模拟执行时间
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.random() * 500 + 100);
+      // Execute tool using ToolExecutionService
+      const executionResult = await toolExecutionService.executeTool(chatToolPayload, {
+        userId: ctx.userId,
+        userPayload: ctx.userPayload,
       });
-      const executionTime = Date.now() - startTime;
+
+      const executionTime = executionResult.executionTime;
+      const isSuccess = executionResult.success;
 
       // 发布工具执行结果事件
       await streamManager.publishStreamEvent(sessionId, {
         data: {
           executionTime,
-          isSuccess: true,
+          isSuccess,
           payload,
           phase: 'tool_execution',
-          result,
+          result: executionResult,
         },
         stepIndex,
         type: 'tool_end',
@@ -352,8 +355,10 @@ export const createRuntimeExecutors = (
       // 最终更新数据库
       try {
         await ctx.messageModel.create({
-          content: JSON.stringify(result),
+          content: executionResult.content,
           plugin: payload as any,
+          pluginError: executionResult.error,
+          pluginState: executionResult.state,
           role: 'tool',
           sessionId: state.metadata!.sessionId!,
           threadId: state.metadata?.threadId,
@@ -361,18 +366,18 @@ export const createRuntimeExecutors = (
           topicId: state.metadata?.topicId,
         });
       } catch (error) {
-        console.error('[StreamingLLMExecutor] Failed to update final message: %O', error);
+        console.error('[StreamingToolExecutor] Failed to create tool message: %O', error);
       }
 
       const newState = structuredClone(state);
 
       newState.messages.push({
-        content: JSON.stringify(result),
+        content: executionResult.content,
         role: 'tool',
         tool_call_id: payload.id,
       });
 
-      events.push({ id: payload.id, result, type: 'tool_result' });
+      events.push({ id: payload.id, result: executionResult, type: 'tool_result' });
 
       log('[%s:%d] Tool execution completed (%dms)', sessionId, stepIndex, executionTime);
 
@@ -381,9 +386,9 @@ export const createRuntimeExecutors = (
         newState,
         nextContext: {
           payload: {
-            data: result,
+            data: executionResult,
             executionTime,
-            isSuccess: true,
+            isSuccess,
             toolCall: payload,
             toolCallId: payload.id,
           },
@@ -403,7 +408,6 @@ export const createRuntimeExecutors = (
         data: {
           error: (error as Error).message,
           phase: 'tool_execution',
-          // toolCall,
         },
         stepIndex,
         type: 'error',

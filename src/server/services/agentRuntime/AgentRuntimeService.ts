@@ -12,7 +12,12 @@ import {
   RuntimeExecutorContext,
   createRuntimeExecutors,
 } from '@/server/modules/AgentRuntime/RuntimeExecutors';
+import { mcpService } from '@/server/services/mcp';
+import { PluginGatewayService } from '@/server/services/pluginGateway';
 import { QueueService } from '@/server/services/queue';
+import { searchService } from '@/server/services/search';
+import { ToolExecutionService } from '@/server/services/toolExecution';
+import { BuiltinToolsExecutor } from '@/server/services/toolExecution/builtin';
 
 import type {
   AgentExecutionParams,
@@ -35,6 +40,7 @@ export class AgentRuntimeService {
   private coordinator: AgentRuntimeCoordinator;
   private streamManager: StreamEventManager;
   private queueService: QueueService;
+  private toolExecutionService: ToolExecutionService;
   private get baseURL() {
     return process.env.AGENT_RUNTIME_BASE_URL || 'http://localhost:3010/api/agent';
   }
@@ -50,6 +56,16 @@ export class AgentRuntimeService {
     this.userId = userId;
     this.db = db;
     this.messageModel = new MessageModel(db, this.userId);
+
+    // Initialize ToolExecutionService with dependencies
+    const pluginGatewayService = new PluginGatewayService();
+    const builtinToolsExecutor = new BuiltinToolsExecutor(searchService);
+
+    this.toolExecutionService = new ToolExecutionService({
+      builtinToolsExecutor,
+      mcpService,
+      pluginGatewayService,
+    });
   }
 
   /**
@@ -576,6 +592,7 @@ export class AgentRuntimeService {
       sessionId,
       stepIndex,
       streamManager: this.streamManager,
+      toolExecutionService: this.toolExecutionService,
       userId: metadata?.userId,
     };
 

@@ -1057,8 +1057,7 @@ describe('AgentRuntime', () => {
         async runner(context: AgentRuntimeContext, _state: AgentState) {
           if (context.phase === 'user_input') {
             return {
-              type: 'call_tools_batch' as const,
-              toolsCalling: [
+              payload: [
                 {
                   id: 'call_a',
                   type: 'function' as const,
@@ -1075,6 +1074,7 @@ describe('AgentRuntime', () => {
                   function: { name: 'tool_c', arguments: '{}' },
                 },
               ],
+              type: 'call_tools_batch' as const,
             };
           }
           return { type: 'finish' as const, reason: 'completed' as const };
@@ -1120,20 +1120,20 @@ describe('AgentRuntime', () => {
             // Return array of instructions
             return [
               {
-                type: 'call_tool' as const,
-                toolCall: {
+                payload: {
                   id: 'call_1',
                   type: 'function' as const,
                   function: { name: 'tool_1', arguments: '{}' },
                 },
+                type: 'call_tool' as const,
               },
               {
-                type: 'call_tool' as const,
-                toolCall: {
+                payload: {
                   id: 'call_2',
                   type: 'function' as const,
                   function: { name: 'tool_2', arguments: '{}' },
                 },
+                type: 'call_tool' as const,
               },
             ];
           }
@@ -1174,15 +1174,14 @@ describe('AgentRuntime', () => {
             // Return array: safe tool + approval request
             return [
               {
-                type: 'call_tool' as const,
-                toolCall: {
+                payload: {
                   id: 'call_safe',
                   type: 'function' as const,
                   function: { name: 'safe_tool', arguments: '{}' },
                 },
+                type: 'call_tool' as const,
               },
               {
-                type: 'request_human_approve' as const,
                 pendingToolsCalling: [
                   {
                     id: 'call_danger',
@@ -1190,6 +1189,7 @@ describe('AgentRuntime', () => {
                     function: { name: 'danger_tool', arguments: '{}' },
                   },
                 ],
+                type: 'request_human_approve' as const,
               },
             ];
           }
@@ -1252,8 +1252,7 @@ describe('AgentRuntime', () => {
         async runner(context: AgentRuntimeContext, _state: AgentState) {
           if (context.phase === 'user_input') {
             return {
-              type: 'call_tools_batch' as const,
-              toolsCalling: [
+              payload: [
                 {
                   id: 'call_expensive',
                   type: 'function' as const,
@@ -1265,6 +1264,7 @@ describe('AgentRuntime', () => {
                   function: { name: 'cheap_tool', arguments: '{}' },
                 },
               ],
+              type: 'call_tools_batch' as const,
             };
           }
           return { type: 'finish' as const, reason: 'completed' as const };
