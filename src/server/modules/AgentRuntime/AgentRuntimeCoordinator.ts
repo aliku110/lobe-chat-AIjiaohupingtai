@@ -62,7 +62,7 @@ export class AgentRuntimeCoordinator {
       // 如果状态变为 done，发送 agent runtime end 事件
       if (state.status === 'done' && previousState?.status !== 'done') {
         await this.streamEventManager.publishAgentRuntimeEnd(sessionId, state.stepCount, state);
-        log('Agent runtime completed for session %s', sessionId);
+        log('[%s] Agent runtime completed', sessionId);
       }
     } catch (error) {
       console.error('Failed to save agent state and handle events:', error);

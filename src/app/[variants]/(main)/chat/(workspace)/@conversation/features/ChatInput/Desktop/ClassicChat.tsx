@@ -19,7 +19,7 @@ import { HotkeyEnum, KeyEnum } from '@/types/hotkey';
 import { useSend } from '../useSend';
 import MessageFromUrl from './MessageFromUrl';
 
-const leftAgentActions: ActionKeys[] = ['agentMode', 'model', 'mainToken'];
+const leftAgentActions: ActionKeys[] = ['agentMode', 'model', 'mainToken', 'clear'];
 
 const leftActions: ActionKeys[] = [
   'agentMode',

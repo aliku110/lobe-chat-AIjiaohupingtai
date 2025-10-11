@@ -42,7 +42,7 @@ export class GeneralAgent {
     context: AgentRuntimeContext,
     state: AgentState,
   ): Promise<AgentInstruction | AgentInstruction[]> {
-    log('Processing phase: %s for session %s', context.phase, this.config.sessionId);
+    log(`[${this.config.sessionId}] Processing phase: %s`, context.phase);
 
     switch (context.phase) {
       case 'user_input': {
@@ -59,31 +59,31 @@ export class GeneralAgent {
       }
 
       case 'llm_result': {
-        // LLM 完成，根据是否有 tools calling 来判断
+        // LLM completed, determine next action based on tool calls
         const payload = context.payload as GeneralAgentLLMResultPayload;
 
-        // 有 tools 则调 tool
+        // Execute tools if present
         if (payload.hasToolsCalling) {
-          // 使用原始的 tool_calls (MessageToolCall[]) 而不是转换后的 toolsCalling
-          const toolCalls = payload.result.tool_calls;
+          // Use original tool_calls (MessageToolCall[]) instead of transformed toolsCalling
+          const toolsCalling = payload.toolsCalling;
 
-          // 返回工具调用指令数组
-          // 如果有多个工具调用，使用批量执行以提高性能
-          if (toolCalls.length > 1) {
+          // Return tool calling instructions
+          // Use batch execution for multiple tool calls to improve performance
+          if (toolsCalling.length > 1) {
             return {
-              toolsCalling: toolCalls as any, // MessageToolCall[] 兼容 ToolsCalling[]
+              payload: toolsCalling as any,
               type: 'call_tools_batch',
             };
-          } else if (toolCalls.length === 1) {
-            // 单个工具直接执行
+          } else if (toolsCalling.length === 1) {
+            // Single tool executes directly
             return {
-              toolCall: toolCalls[0] as any, // MessageToolCall 兼容 ToolsCalling
+              payload: toolsCalling[0] as any,
               type: 'call_tool',
             };
           }
         }
 
-        // 没有 tools 则结束
+        // Finish if no tools
         return {
           reason: 'completed',
           reasonDetail: 'General agent completed successfully',
@@ -93,7 +93,7 @@ export class GeneralAgent {
 
       case 'tool_result':
       case 'tools_batch_result': {
-        // 工具执行完成后，继续调用 LLM
+        // Continue calling LLM after tool execution completes
         return {
           payload: {
             messages: state.messages,
@@ -116,12 +116,12 @@ export class GeneralAgent {
   }
 
   /**
-   * 空工具注册表
+   * Empty tools registry
    */
   tools = {};
 
   /**
-   * 获取配置
+   * Get configuration
    */
   getConfig() {
     return this.config;

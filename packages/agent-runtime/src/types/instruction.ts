@@ -1,3 +1,4 @@
+
 import type { FinishReason } from './event';
 import { AgentState, ToolRegistry, ToolsCalling } from './state';
 import type { Cost, CostCalculationContext, Usage } from './usage';
@@ -79,10 +80,19 @@ export interface Agent {
 }
 
 export interface CallLLMPayload {
+  isFirstMessage?: boolean;
   messages: any[];
   model: string;
   provider: string;
   tools: any[];
+}
+
+export interface CallingToolPayload {
+  apiName: string;
+  arguments: string;
+  id: string;
+  identifier: string;
+  type: 'mcp' | 'default' | 'markdown' | 'standalone';
 }
 
 export interface AgentInstructionCallLlm {
@@ -91,12 +101,12 @@ export interface AgentInstructionCallLlm {
 }
 
 export interface AgentInstructionCallTool {
-  toolCall: ToolsCalling;
+  payload: CallingToolPayload;
   type: 'call_tool';
 }
 
 export interface AgentInstructionCallToolsBatch {
-  toolsCalling: ToolsCalling[];
+  payload: ToolsCalling[];
   type: 'call_tools_batch';
 }
 

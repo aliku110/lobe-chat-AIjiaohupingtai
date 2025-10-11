@@ -403,7 +403,7 @@ export class AgentRuntime {
   /** Create call_tool executor */
   private createCallToolExecutor(): InstructionExecutor {
     return async (instruction, state) => {
-      const { toolCall } = instruction as Extract<AgentInstruction, { type: 'call_tool' }>;
+      const { payload: toolCall } = instruction as Extract<AgentInstruction, { type: 'call_tool' }>;
       const newState = structuredClone(state);
       const events: AgentEvent[] = [];
 
@@ -411,10 +411,10 @@ export class AgentRuntime {
       newState.status = 'running';
 
       const tools = this.agent.tools || ({} as ToolRegistry);
-      const handler = tools[toolCall.function.name];
-      if (!handler) throw new Error(`Tool not found: ${toolCall.function.name}`);
+      const handler = tools[toolCall.apiName];
+      if (!handler) throw new Error(`Tool not found: ${toolCall.apiName}`);
 
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = JSON.parse(toolCall.arguments);
       const result = await handler(args);
 
       newState.messages.push({

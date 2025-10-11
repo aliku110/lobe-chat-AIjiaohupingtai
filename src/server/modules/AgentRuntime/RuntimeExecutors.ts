@@ -8,7 +8,6 @@ import { consumeStreamUntilDone } from '@lobechat/model-runtime';
 import { ChatToolPayload, ClientSecretPayload, MessageToolCall } from '@lobechat/types';
 import debug from 'debug';
 
-import { LOADING_FLAT } from '@/const/message';
 import { MessageModel } from '@/database/models/message';
 import { GeneralAgentLLMResultPayload } from '@/server/modules/AgentRuntime/GeneralAgent';
 import { transformerToolsCalling } from '@/server/modules/AgentRuntime/transformerToolsCalling';
@@ -45,11 +44,11 @@ export const createRuntimeExecutors = (
 
     // 类型断言确保 payload 的正确性
 
-    log(`[${stage}] Starting for session %s:%d, payload: %O`, sessionId, stepIndex, llmPayload);
+    log(`[${stage}] Starting for session %s:%d`, sessionId, stepIndex);
 
     // create assistant message
     const assistantMessageItem = await ctx.messageModel.create({
-      content: LOADING_FLAT,
+      content: '',
       fromModel: llmPayload.model,
       fromProvider: llmPayload.provider,
       role: 'assistant',
@@ -177,6 +176,11 @@ export const createRuntimeExecutors = (
             toolsCalling = payload;
             tool_calls = raw;
 
+            // 如果有 textBuffer,先推一次
+            if (!!textBuffer) {
+              await flushTextBuffer();
+            }
+
             await streamManager.publishStreamChunk(sessionId, stepIndex, {
               chunkType: 'tools_calling',
               toolsCalling: payload,
@@ -189,6 +193,9 @@ export const createRuntimeExecutors = (
       // 消费流确保所有回调执行完成
       await consumeStreamUntilDone(response);
 
+      await flushTextBuffer();
+      await flushReasoningBuffer();
+
       // 清理定时器并 flush 剩余 buffer
       if (textBufferTimer) {
         clearTimeout(textBufferTimer);
@@ -199,9 +206,6 @@ export const createRuntimeExecutors = (
         clearTimeout(reasoningBufferTimer);
         reasoningBufferTimer = null;
       }
-
-      await flushTextBuffer();
-      await flushReasoningBuffer();
 
       log('finish model-runtime calling');
 
@@ -234,7 +238,7 @@ export const createRuntimeExecutors = (
         type: 'stream_end',
       });
 
-      log('LLM execution completed for session %s:%d', sessionId, stepIndex);
+      log('[%s:%d] call_llm completed', sessionId, stepIndex);
 
       // 最终更新数据库
       try {
@@ -255,7 +259,7 @@ export const createRuntimeExecutors = (
       newState.messages.push({
         content,
         role: 'assistant',
-        tool_calls: toolsCalling.length > 0 ? toolsCalling : undefined,
+        tool_calls: tool_calls.length > 0 ? tool_calls : undefined,
       });
 
       return {
@@ -299,33 +303,31 @@ export const createRuntimeExecutors = (
    * 工具执行
    */
   call_tool: async (instruction, state) => {
-    const { toolCall } = instruction as Extract<AgentInstruction, { type: 'call_tool' }>;
+    const stage = 'call_tool';
+
+    const { payload } = instruction as Extract<AgentInstruction, { type: 'call_tool' }>;
     const { sessionId, stepIndex, streamManager } = ctx;
     const events: AgentEvent[] = [];
 
-    log('Executing tool %s for session %s:%d', toolCall.function.name, sessionId, stepIndex);
+    log(`[${stage}] %O`, payload);
 
     // 发布工具执行开始事件
     await streamManager.publishStreamEvent(sessionId, {
-      data: {
-        phase: 'tool_execution',
-        toolCall,
-        toolName: toolCall.function.name,
-      },
+      data: payload,
       stepIndex,
-      type: 'step_start',
+      type: 'tool_start',
     });
 
     try {
-      const args = JSON.parse(toolCall.function.arguments || '{}');
+      const args = JSON.parse(payload.arguments || '{}');
       const startTime = Date.now();
 
       // Mock 工具执行结果
       const result = {
         args,
-        message: `Mock execution of tool ${toolCall.function.name} with args: ${JSON.stringify(args)}`,
+        message: `Mock execution of tool ${payload.apiName} with args: ${JSON.stringify(args)}`,
         success: true,
-        toolName: toolCall.function.name,
+        toolName: payload.apiName,
       };
 
       // 模拟执行时间
@@ -338,28 +340,41 @@ export const createRuntimeExecutors = (
       await streamManager.publishStreamEvent(sessionId, {
         data: {
           executionTime,
+          isSuccess: true,
+          payload,
           phase: 'tool_execution',
           result,
-          toolCall,
         },
         stepIndex,
-        type: 'step_complete',
+        type: 'tool_end',
       });
+
+      // 最终更新数据库
+      try {
+        await ctx.messageModel.create({
+          content: JSON.stringify(result),
+          plugin: payload as any,
+          role: 'tool',
+          sessionId: state.metadata!.sessionId!,
+          threadId: state.metadata?.threadId,
+          tool_call_id: payload.id,
+          topicId: state.metadata?.topicId,
+        });
+      } catch (error) {
+        console.error('[StreamingLLMExecutor] Failed to update final message: %O', error);
+      }
 
       const newState = structuredClone(state);
+
       newState.messages.push({
-        content: typeof result === 'string' ? result : JSON.stringify(result),
+        content: JSON.stringify(result),
         role: 'tool',
-        tool_call_id: toolCall.id,
+        tool_call_id: payload.id,
       });
 
-      events.push({
-        id: toolCall.id,
-        result,
-        type: 'tool_result',
-      });
+      events.push({ id: payload.id, result, type: 'tool_result' });
 
-      log('Tool execution completed for session %s:%d (%dms)', sessionId, stepIndex, executionTime);
+      log('[%s:%d] Tool execution completed (%dms)', sessionId, stepIndex, executionTime);
 
       return {
         events,
@@ -369,8 +384,8 @@ export const createRuntimeExecutors = (
             data: result,
             executionTime,
             isSuccess: true,
-            toolCall,
-            toolCallId: toolCall.id,
+            toolCall: payload,
+            toolCallId: payload.id,
           },
           phase: 'tool_result',
           session: {
@@ -388,7 +403,7 @@ export const createRuntimeExecutors = (
         data: {
           error: (error as Error).message,
           phase: 'tool_execution',
-          toolCall,
+          // toolCall,
         },
         stepIndex,
         type: 'error',

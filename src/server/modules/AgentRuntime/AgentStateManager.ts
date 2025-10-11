@@ -82,7 +82,7 @@ export class AgentStateManager {
       }
 
       const state = JSON.parse(serializedState) as AgentState;
-      log('Loaded state for session %s (step %d)', sessionId, state.stepCount);
+      log('[%s] Loaded state (step %d)', sessionId, state.stepCount);
 
       return state;
     } catch (error) {
@@ -140,7 +140,7 @@ export class AgentStateManager {
       await pipeline.exec();
 
       log(
-        'Saved step result for session %s:%d with %d events',
+        '[%s:%d] Saved step result with %d events',
         sessionId,
         stepResult.stepIndex,
         stepResult.events?.length || 0,

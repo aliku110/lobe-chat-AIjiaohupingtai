@@ -28,7 +28,7 @@ export class QStashQueueServiceImpl implements QueueServiceImpl {
       context,
       endpoint,
       payload,
-      delay = 1000,
+      delay = 50,
       priority = 'normal',
       retries = 3,
     } = message;
@@ -55,9 +55,8 @@ export class QStashQueueServiceImpl implements QueueServiceImpl {
       });
 
       log(
-        'Scheduled step %d for session %s to %s with %dms delay (messageId: %s)',
+        `[${sessionId}] Scheduled step %d to %s with %dms delay (messageId: %s)`,
         stepIndex,
-        sessionId,
         endpoint,
         delay,
         'messageId' in response ? response.messageId : 'batch-message',

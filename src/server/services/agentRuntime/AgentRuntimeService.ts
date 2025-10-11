@@ -133,7 +133,7 @@ export class AgentRuntimeService {
     const { sessionId, stepIndex, context, humanInput, approvedToolCall, rejectionReason } = params;
 
     try {
-      log('Executing step %d for session %s', stepIndex, sessionId);
+      log(`[${sessionId}] Executing step %d`, stepIndex);
 
       // 发布步骤开始事件
       await this.streamManager.publishStreamEvent(sessionId, {
@@ -153,7 +153,11 @@ export class AgentRuntimeService {
       }
 
       // 创建 Agent 和 Runtime 实例
-      const { runtime } = await this.createAgentRuntime(sessionId, sessionMetadata);
+      const { runtime } = await this.createAgentRuntime({
+        metadata: sessionMetadata,
+        sessionId,
+        stepIndex,
+      });
 
       // 处理人工干预
       let currentContext = context;
@@ -187,6 +191,19 @@ export class AgentRuntimeService {
       );
       let nextStepScheduled = false;
 
+      // 发布步骤完成事件
+      await this.streamManager.publishStreamEvent(sessionId, {
+        data: {
+          finalState: stepResult.newState,
+          nextStepScheduled,
+          stepIndex,
+        },
+        stepIndex,
+        type: 'step_complete',
+      });
+
+      log(`[${sessionId}] Step %d completed`, stepIndex);
+
       if (shouldContinue && stepResult.nextContext) {
         const nextStepIndex = stepIndex + 1;
         const delay = this.calculateStepDelay(stepResult);
@@ -202,21 +219,8 @@ export class AgentRuntimeService {
         });
         nextStepScheduled = true;
 
-        log('Scheduled next step %d for session %s', nextStepIndex, sessionId);
+        log(`[${sessionId}] Scheduled next step %d for session %s`, nextStepIndex);
       }
-
-      // 发布步骤完成事件
-      await this.streamManager.publishStreamEvent(sessionId, {
-        data: {
-          finalState: stepResult.newState,
-          nextStepScheduled,
-          stepIndex,
-        },
-        stepIndex,
-        type: 'step_complete',
-      });
-
-      log('Step %d completed for session %s', stepIndex, sessionId);
 
       return {
         nextStepScheduled,
@@ -425,7 +429,7 @@ export class AgentRuntimeService {
    * 显式启动会话执行
    */
   async startExecution(params: StartExecutionParams): Promise<StartExecutionResult> {
-    const { sessionId, context, priority = 'normal', delay = 1000 } = params;
+    const { sessionId, context, priority = 'normal', delay = 50 } = params;
 
     try {
       log('Starting execution for session %s', sessionId);
@@ -462,8 +466,7 @@ export class AgentRuntimeService {
         executionContext = {
           payload: {
             isFirstMessage: true,
-            message: { content: '' },
-            sessionId,
+            message: [{ content: '' }],
           },
           phase: 'user_input' as const,
           session: {
@@ -550,23 +553,30 @@ export class AgentRuntimeService {
   /**
    * 创建 Agent Runtime 实例
    */
-  private async createAgentRuntime(sessionId: string, sessionMetadata?: any) {
+  private async createAgentRuntime({
+    metadata,
+    sessionId,
+    stepIndex,
+  }: {
+    metadata?: any;
+    sessionId: string;
+    stepIndex: number;
+  }) {
     // 创建 Durable Agent 实例
     const agent = new GeneralAgent({
-      agentConfig: sessionMetadata?.agentConfig,
-      modelRuntimeConfig: sessionMetadata?.modelRuntimeConfig,
+      agentConfig: metadata?.agentConfig,
+      modelRuntimeConfig: metadata?.modelRuntimeConfig,
       sessionId,
-      userId: sessionMetadata?.userId,
+      userId: metadata?.userId,
     });
 
     // 创建流式执行器上下文
     const executorContext: RuntimeExecutorContext = {
       messageModel: this.messageModel,
       sessionId,
-      stepIndex: 0,
-      // 会在执行时动态设置
+      stepIndex,
       streamManager: this.streamManager,
-      userId: sessionMetadata?.userId,
+      userId: metadata?.userId,
     };
 
     // 创建 Agent Runtime 实例
@@ -635,16 +645,16 @@ export class AgentRuntimeService {
    * 计算步骤延迟
    */
   private calculateStepDelay(stepResult: any): number {
-    const baseDelay = 1000;
+    const baseDelay = 50;
 
     // 如果有工具调用，延迟长一点
     if (stepResult.events?.some((e: any) => e.type === 'tool_result')) {
-      return baseDelay + 1000;
+      return baseDelay + 50;
     }
 
     // 如果有错误，使用指数退避
     if (stepResult.events?.some((e: any) => e.type === 'error')) {
-      return Math.min(baseDelay * 2, 10_000);
+      return Math.min(baseDelay * 2, 1000);
     }
 
     return baseDelay;

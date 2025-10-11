@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'sessionId is required' }, { status: 400 });
     }
 
-    log(`Starting step ${stepIndex} for session ${sessionId}`);
+    log(`[${sessionId}] Starting step ${stepIndex}`);
 
     // 使用 AgentRuntimeService 执行步骤
     const result = await agentRuntimeService.executeStep({
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
     };
 
     log(
-      `Step ${stepIndex} completed for session ${sessionId} (${executionTime}ms, status: ${result.state.status})`,
+      `[${sessionId}] Step ${stepIndex} completed (${executionTime}ms, status: ${result.state.status})`,
     );
 
     return NextResponse.json(responseData);

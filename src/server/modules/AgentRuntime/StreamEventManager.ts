@@ -18,6 +18,8 @@ export interface StreamEvent {
     | 'stream_start'
     | 'stream_chunk'
     | 'stream_end'
+    | 'tool_start'
+    | 'tool_end'
     | 'step_start'
     | 'step_complete'
     | 'error';
