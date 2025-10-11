@@ -52,9 +52,6 @@ const InputEditor = memo<{ defaultRows?: number }>(({ defaultRows = 2 }) => {
   const isChineseInput = useRef(false);
 
   const useCmdEnterToSend = useUserStore(preferenceSelectors.useCmdEnterToSend);
-  const wrapperShortcut = useCmdEnterToSend
-    ? KeyEnum.Enter
-    : combineKeys([KeyEnum.Mod, KeyEnum.Enter]);
 
   const enableMention = !!mentionItems && mentionItems.length > 0;
 
@@ -104,7 +101,6 @@ const InputEditor = memo<{ defaultRows?: number }>(({ defaultRows = 2 }) => {
       className={className}
       content={''}
       editor={editor}
-      markdownOption={enableMarkdown}
       mentionOption={
         enableMention
           ? {
