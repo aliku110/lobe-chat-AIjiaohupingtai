@@ -1,4 +1,4 @@
-import { AgentRuntimeContext, AgentState } from '@lobechat/agent-runtime';
+import { AgentInstruction, AgentRuntimeContext, AgentState } from '@lobechat/agent-runtime';
 import { ChatToolPayload, MessageToolCall } from '@lobechat/types';
 import debug from 'debug';
 
@@ -38,7 +38,10 @@ export class GeneralAgent {
     this.config = config;
   }
 
-  async runner(context: AgentRuntimeContext, state: AgentState) {
+  async runner(
+    context: AgentRuntimeContext,
+    state: AgentState,
+  ): Promise<AgentInstruction | AgentInstruction[]> {
     log('Processing phase: %s for session %s', context.phase, this.config.sessionId);
 
     switch (context.phase) {
@@ -61,23 +64,36 @@ export class GeneralAgent {
 
         // 有 tools 则调 tool
         if (payload.hasToolsCalling) {
-          return payload.toolsCalling.map((item) => ({
-            payload: item,
-            type: 'call_tool',
-          }))[0];
+          // 使用原始的 tool_calls (MessageToolCall[]) 而不是转换后的 toolsCalling
+          const toolCalls = payload.result.tool_calls;
+
+          // 返回工具调用指令数组
+          // 如果有多个工具调用，使用批量执行以提高性能
+          if (toolCalls.length > 1) {
+            return {
+              toolsCalling: toolCalls as any, // MessageToolCall[] 兼容 ToolsCalling[]
+              type: 'call_tools_batch',
+            };
+          } else if (toolCalls.length === 1) {
+            // 单个工具直接执行
+            return {
+              toolCall: toolCalls[0] as any, // MessageToolCall 兼容 ToolsCalling
+              type: 'call_tool',
+            };
+          }
         }
 
         // 没有 tools 则结束
         return {
           reason: 'completed',
-          reasonDetail: 'Simple agent completed successfully',
+          reasonDetail: 'General agent completed successfully',
           type: 'finish',
         };
       }
 
-      case 'tool_result': {
-        // 根据结果来判断
-        // call LLM
+      case 'tool_result':
+      case 'tools_batch_result': {
+        // 工具执行完成后，继续调用 LLM
         return {
           payload: {
             messages: state.messages,

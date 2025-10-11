@@ -74,26 +74,69 @@ export class AgentRuntime {
       // Use provided context or create initial context
       const runtimeContext = context || this.createInitialContext(newState);
 
-      let result: { events: AgentEvent[]; newState: AgentState; nextContext?: AgentRuntimeContext };
+      // Get instructions from agent runner and normalize to array
+      let rawInstructions: any;
 
       // Handle human approved tool calls
       if (runtimeContext.phase === 'human_approved_tool') {
         const approvedPayload = runtimeContext.payload as { approvedToolCall: ToolsCalling };
-        result = await this.executors.call_tool(
-          { toolCall: approvedPayload.approvedToolCall, type: 'call_tool' },
-          newState,
-        );
+        rawInstructions = { toolCall: approvedPayload.approvedToolCall, type: 'call_tool' };
       } else {
         // Standard flow: Plan -> Execute
-        const instruction = await this.agent.runner(runtimeContext, newState);
-        result = await this.executors[instruction.type](instruction, newState);
+        rawInstructions = await this.agent.runner(runtimeContext, newState);
       }
 
-      // Ensure stepCount is preserved in the result
-      result.newState.stepCount = newState.stepCount;
-      result.newState.lastModified = newState.lastModified;
+      // Normalize to array
+      const instructions = Array.isArray(rawInstructions) ? rawInstructions : [rawInstructions];
 
-      return result;
+      // Execute all instructions sequentially
+      let currentState = newState;
+      const allEvents: AgentEvent[] = [];
+      let finalNextContext: AgentRuntimeContext | undefined = undefined;
+
+      for (const instruction of instructions) {
+        let result;
+
+        // Special handling for batch tool execution
+        if (instruction.type === 'call_tools_batch') {
+          result = await this.executeToolsBatch(instruction as any, currentState);
+        } else {
+          const executor = this.executors[instruction.type as keyof typeof this.executors];
+          if (!executor) {
+            throw new Error(`No executor found for instruction type: ${instruction.type}`);
+          }
+          result = await executor(instruction, currentState);
+        }
+
+        // Accumulate events
+        allEvents.push(...result.events);
+
+        // Update state
+        currentState = result.newState;
+
+        // Keep the last nextContext
+        if (result.nextContext) {
+          finalNextContext = result.nextContext;
+        }
+
+        // Stop execution if blocked
+        if (
+          currentState.status === 'waiting_for_human_input' ||
+          currentState.status === 'interrupted'
+        ) {
+          break;
+        }
+      }
+
+      // Ensure stepCount and lastModified are preserved
+      currentState.stepCount = newState.stepCount;
+      currentState.lastModified = newState.lastModified;
+
+      return {
+        events: allEvents,
+        newState: currentState,
+        nextContext: finalNextContext,
+      };
     } catch (error) {
       const errorState = structuredClone(state);
       errorState.stepCount += 1;
@@ -521,6 +564,99 @@ export class AgentRuntime {
   }
 
   // ============ Helper Methods ============
+
+  /**
+   * Execute multiple tool calls concurrently
+   */
+  private async executeToolsBatch(
+    instruction: { toolsCalling: ToolsCalling[]; type: 'call_tools_batch' },
+    baseState: AgentState,
+  ): Promise<{
+    events: AgentEvent[];
+    newState: AgentState;
+    nextContext?: AgentRuntimeContext;
+  }> {
+    const { toolsCalling } = instruction;
+
+    // Execute all tools concurrently based on the same state
+    const results = await Promise.all(
+      toolsCalling.map((toolCall) =>
+        this.executors.call_tool(
+          { toolCall, type: 'call_tool' } as any,
+          structuredClone(baseState), // Each tool starts from the same base state
+        ),
+      ),
+    );
+
+    // Merge results
+    return this.mergeToolResults(results, baseState);
+  }
+
+  /**
+   * Merge multiple tool execution results
+   */
+  private mergeToolResults(
+    results: Array<{
+      events: AgentEvent[];
+      newState: AgentState;
+      nextContext?: AgentRuntimeContext;
+    }>,
+    baseState: AgentState,
+  ): {
+    events: AgentEvent[];
+    newState: AgentState;
+    nextContext?: AgentRuntimeContext;
+  } {
+    const newState = structuredClone(baseState);
+    const allEvents: AgentEvent[] = [];
+
+    // Merge all tool messages in order
+    for (const result of results) {
+      // Extract tool role messages
+      const toolMessages = result.newState.messages.filter((m) => m.role === 'tool');
+      newState.messages.push(...toolMessages);
+
+      // Merge events
+      allEvents.push(...result.events);
+
+      // Merge usage statistics (if available)
+      if (result.newState.usage && newState.usage) {
+        newState.usage.tools.totalCalls += result.newState.usage.tools.totalCalls;
+        newState.usage.tools.totalTimeMs += result.newState.usage.tools.totalTimeMs;
+
+        // Merge per-tool statistics
+        Object.entries(result.newState.usage.tools.byTool).forEach(([tool, stats]) => {
+          if (newState.usage.tools.byTool[tool]) {
+            newState.usage.tools.byTool[tool].calls += stats.calls;
+            newState.usage.tools.byTool[tool].totalTimeMs += stats.totalTimeMs;
+          } else {
+            newState.usage.tools.byTool[tool] = { ...stats };
+          }
+        });
+      }
+
+      // Merge cost statistics (if available)
+      if (result.newState.cost && newState.cost) {
+        newState.cost.tools.total += result.newState.cost.tools.total;
+        newState.cost.total += result.newState.cost.tools.total;
+      }
+    }
+
+    newState.lastModified = new Date().toISOString();
+
+    return {
+      events: allEvents,
+      newState,
+      nextContext: {
+        payload: {
+          toolCount: results.length,
+          toolResults: results.map((r) => r.nextContext?.payload),
+        },
+        phase: 'tools_batch_result',
+        session: this.createSessionContext(newState),
+      },
+    };
+  }
 
   /**
    * Handle cost limit exceeded scenario

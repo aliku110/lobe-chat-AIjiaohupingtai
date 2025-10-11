@@ -1043,4 +1043,249 @@ describe('AgentRuntime', () => {
       );
     });
   });
+
+  describe('Batch Tool Execution', () => {
+    it('should execute multiple tools concurrently with call_tools_batch instruction', async () => {
+      // Agent that returns multiple tool calls
+      class BatchToolAgent implements Agent {
+        tools = {
+          tool_a: vi.fn().mockResolvedValue({ result: 'result_a' }),
+          tool_b: vi.fn().mockResolvedValue({ result: 'result_b' }),
+          tool_c: vi.fn().mockResolvedValue({ result: 'result_c' }),
+        };
+
+        async runner(context: AgentRuntimeContext, _state: AgentState) {
+          if (context.phase === 'user_input') {
+            return {
+              type: 'call_tools_batch' as const,
+              toolsCalling: [
+                {
+                  id: 'call_a',
+                  type: 'function' as const,
+                  function: { name: 'tool_a', arguments: '{}' },
+                },
+                {
+                  id: 'call_b',
+                  type: 'function' as const,
+                  function: { name: 'tool_b', arguments: '{}' },
+                },
+                {
+                  id: 'call_c',
+                  type: 'function' as const,
+                  function: { name: 'tool_c', arguments: '{}' },
+                },
+              ],
+            };
+          }
+          return { type: 'finish' as const, reason: 'completed' as const };
+        }
+      }
+
+      const agent = new BatchToolAgent();
+      const runtime = new AgentRuntime(agent);
+      const state = AgentRuntime.createInitialState({
+        sessionId: 'batch-test',
+        messages: [{ role: 'user', content: 'Execute tools' }],
+      });
+
+      const result = await runtime.step(state);
+
+      // Should have executed all 3 tools
+      expect(agent.tools.tool_a).toHaveBeenCalled();
+      expect(agent.tools.tool_b).toHaveBeenCalled();
+      expect(agent.tools.tool_c).toHaveBeenCalled();
+
+      // Should have 3 tool result events
+      expect(result.events.filter((e) => e.type === 'tool_result')).toHaveLength(3);
+
+      // Should have 3 tool messages in state
+      const toolMessages = result.newState.messages.filter((m) => m.role === 'tool');
+      expect(toolMessages).toHaveLength(3);
+
+      // Should have tools_batch_result phase in nextContext
+      expect(result.nextContext?.phase).toBe('tools_batch_result');
+      expect(result.nextContext?.payload).toHaveProperty('toolCount', 3);
+    });
+
+    it('should support agent returning instruction array', async () => {
+      // Agent that returns array of instructions
+      class ArrayReturnAgent implements Agent {
+        tools = {
+          tool_1: vi.fn().mockResolvedValue({ result: 'tool_1_result' }),
+          tool_2: vi.fn().mockResolvedValue({ result: 'tool_2_result' }),
+        };
+
+        async runner(context: AgentRuntimeContext, _state: AgentState) {
+          if (context.phase === 'user_input') {
+            // Return array of instructions
+            return [
+              {
+                type: 'call_tool' as const,
+                toolCall: {
+                  id: 'call_1',
+                  type: 'function' as const,
+                  function: { name: 'tool_1', arguments: '{}' },
+                },
+              },
+              {
+                type: 'call_tool' as const,
+                toolCall: {
+                  id: 'call_2',
+                  type: 'function' as const,
+                  function: { name: 'tool_2', arguments: '{}' },
+                },
+              },
+            ];
+          }
+          return { type: 'finish' as const, reason: 'completed' as const };
+        }
+      }
+
+      const agent = new ArrayReturnAgent();
+      const runtime = new AgentRuntime(agent);
+      const state = AgentRuntime.createInitialState({
+        sessionId: 'array-test',
+        messages: [{ role: 'user', content: 'Execute tools' }],
+      });
+
+      const result = await runtime.step(state);
+
+      // Should have executed both tools sequentially
+      expect(agent.tools.tool_1).toHaveBeenCalled();
+      expect(agent.tools.tool_2).toHaveBeenCalled();
+
+      // Should have 2 tool result events
+      expect(result.events.filter((e) => e.type === 'tool_result')).toHaveLength(2);
+
+      // Should have 2 tool messages in state
+      const toolMessages = result.newState.messages.filter((m) => m.role === 'tool');
+      expect(toolMessages).toHaveLength(2);
+    });
+
+    it('should stop execution when encountering blocking status', async () => {
+      // Agent that returns mixed instructions with approval
+      class BlockingAgent implements Agent {
+        tools = {
+          safe_tool: vi.fn().mockResolvedValue({ result: 'safe_result' }),
+        };
+
+        async runner(context: AgentRuntimeContext, _state: AgentState) {
+          if (context.phase === 'user_input') {
+            // Return array: safe tool + approval request
+            return [
+              {
+                type: 'call_tool' as const,
+                toolCall: {
+                  id: 'call_safe',
+                  type: 'function' as const,
+                  function: { name: 'safe_tool', arguments: '{}' },
+                },
+              },
+              {
+                type: 'request_human_approve' as const,
+                pendingToolsCalling: [
+                  {
+                    id: 'call_danger',
+                    type: 'function' as const,
+                    function: { name: 'danger_tool', arguments: '{}' },
+                  },
+                ],
+              },
+            ];
+          }
+          return { type: 'finish' as const, reason: 'completed' as const };
+        }
+      }
+
+      const agent = new BlockingAgent();
+      const runtime = new AgentRuntime(agent);
+      const state = AgentRuntime.createInitialState({
+        sessionId: 'blocking-test',
+        messages: [{ role: 'user', content: 'Execute' }],
+      });
+
+      const result = await runtime.step(state);
+
+      // Safe tool should have been executed
+      expect(agent.tools.safe_tool).toHaveBeenCalled();
+
+      // Should be in waiting state (blocked by approval request)
+      expect(result.newState.status).toBe('waiting_for_human_input');
+
+      // Should have pending tool calls
+      expect(result.newState.pendingToolsCalling).toHaveLength(1);
+      expect(result.newState.pendingToolsCalling![0].function.name).toBe('danger_tool');
+
+      // Should have both tool_result and human_approve_required events
+      expect(result.events).toContainEqual(expect.objectContaining({ type: 'tool_result' }));
+      expect(result.events).toContainEqual(
+        expect.objectContaining({ type: 'human_approve_required' }),
+      );
+    });
+
+    it('should merge tool results correctly', async () => {
+      // Agent that returns batch with tools that modify usage/cost
+      class UsageTrackingAgent implements Agent {
+        tools = {
+          expensive_tool: vi.fn().mockResolvedValue({ cost: 10 }),
+          cheap_tool: vi.fn().mockResolvedValue({ cost: 1 }),
+        };
+
+        calculateUsage(
+          operationType: 'llm' | 'tool' | 'human_interaction',
+          operationResult: any,
+          previousUsage: Usage,
+        ): Usage {
+          if (operationType === 'tool') {
+            return {
+              ...previousUsage,
+              tools: {
+                ...previousUsage.tools,
+                totalCalls: previousUsage.tools.totalCalls + 1,
+                totalTimeMs: previousUsage.tools.totalTimeMs + 100,
+              },
+            };
+          }
+          return previousUsage;
+        }
+
+        async runner(context: AgentRuntimeContext, _state: AgentState) {
+          if (context.phase === 'user_input') {
+            return {
+              type: 'call_tools_batch' as const,
+              toolsCalling: [
+                {
+                  id: 'call_expensive',
+                  type: 'function' as const,
+                  function: { name: 'expensive_tool', arguments: '{}' },
+                },
+                {
+                  id: 'call_cheap',
+                  type: 'function' as const,
+                  function: { name: 'cheap_tool', arguments: '{}' },
+                },
+              ],
+            };
+          }
+          return { type: 'finish' as const, reason: 'completed' as const };
+        }
+      }
+
+      const agent = new UsageTrackingAgent();
+      const runtime = new AgentRuntime(agent);
+      const state = AgentRuntime.createInitialState({
+        sessionId: 'merge-test',
+        messages: [{ role: 'user', content: 'Execute' }],
+      });
+
+      const result = await runtime.step(state);
+
+      // Both tools should have been called
+      expect(agent.tools.expensive_tool).toHaveBeenCalled();
+      expect(agent.tools.cheap_tool).toHaveBeenCalled();
+
+      // Usage should be merged (2 tools called)
+      expect(result.newState.usage.tools.totalCalls).toBe(2);
+    });
+  });
 });

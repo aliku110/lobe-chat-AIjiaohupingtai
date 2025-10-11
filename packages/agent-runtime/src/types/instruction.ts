@@ -15,6 +15,7 @@ export interface AgentRuntimeContext {
     | 'user_input'
     | 'llm_result'
     | 'tool_result'
+    | 'tools_batch_result'
     | 'human_response'
     | 'human_approved_tool'
     | 'error';
@@ -68,7 +69,10 @@ export interface Agent {
    * @param context - Current runtime context with phase and payload
    * @param state - Complete agent state for reference
    */
-  runner(context: AgentRuntimeContext, state: AgentState): Promise<AgentInstruction>;
+  runner(
+    context: AgentRuntimeContext,
+    state: AgentState,
+  ): Promise<AgentInstruction | AgentInstruction[]>;
 
   /** Optional tools registry held by the agent */
   tools?: ToolRegistry;
@@ -89,6 +93,11 @@ export interface AgentInstructionCallLlm {
 export interface AgentInstructionCallTool {
   toolCall: ToolsCalling;
   type: 'call_tool';
+}
+
+export interface AgentInstructionCallToolsBatch {
+  toolsCalling: ToolsCalling[];
+  type: 'call_tools_batch';
 }
 
 export interface AgentInstructionRequestHumanPrompt {
@@ -126,6 +135,7 @@ export interface AgentInstructionFinish {
 export type AgentInstruction =
   | AgentInstructionCallLlm
   | AgentInstructionCallTool
+  | AgentInstructionCallToolsBatch
   | AgentInstructionRequestHumanPrompt
   | AgentInstructionRequestHumanSelect
   | AgentInstructionRequestHumanApprove
